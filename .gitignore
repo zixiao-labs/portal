@@ -4,3 +4,8 @@ node_modules
 .env.*
 !.env.example
 /dist
+/data/
+/.tanstack/
+/.nasti/
+/artifacts/
+/src/routeTree.gen.ts

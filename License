@@ -1,0 +1,22 @@
+Zixiao Laboratories Portal — Restricted Deployment License
+
+Copyright © Zixiao Laboratories (紫霄实验室). All rights reserved.
+
+Zixiao Laboratories grants its authorized personnel permission to reproduce,
+modify, install, and run the Portal source code solely for internal development
+and for operation on behalf of Zixiao Laboratories. Public or network-accessible
+deployments must use HTTPS and be served exclusively from zixiaolabs.com or a
+subdomain of zixiaolabs.com controlled and authorized by Zixiao Laboratories.
+Local development on a loopback address is permitted; it is not a deployment.
+
+No right is granted to publicly deploy this software on any other domain,
+operate it on behalf of another entity, sell, sublicense, or redistribute the
+Portal or derivative works, or remove or circumvent the deployment restriction.
+Any exception requires prior written permission from Zixiao Laboratories.
+The Zixiao Laboratories name, logo, and other brand assets are not licensed
+for any other use. Third-party components and separately licensed materials
+remain subject to their own licenses.
+
+THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND. TO THE EXTENT
+PERMITTED BY LAW, THE COPYRIGHT HOLDER IS NOT LIABLE FOR CLAIMS, DAMAGES OR
+OTHER LIABILITY ARISING OUT OF OR IN CONNECTION WITH THE SOFTWARE OR ITS USE.

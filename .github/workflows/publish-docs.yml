@@ -1,0 +1,116 @@
+name: Publish portal documents
+
+on:
+  push:
+    branches: [main]
+    paths: ['docs/**', '.docsignore', '.gitignore', '.github/workflows/publish-docs.yml']
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: portal-docs-${{ github.repository }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    if: vars.PORTAL_DOCS_ENABLED == 'true' && github.repository_owner == 'zixiao-labs' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: docs-publish
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Publish committed documents
+        env:
+          PORTAL_ORIGIN: ${{ vars.PORTAL_ORIGIN }}
+          PORTAL_PUBLISH_TOKEN: ${{ secrets.PORTAL_PUBLISH_TOKEN }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import subprocess
+          from urllib.parse import urlencode, urlsplit
+          from urllib.request import Request, build_opener, HTTPRedirectHandler
+          from urllib.error import HTTPError
+
+          print("""
+              +#++++++++++++#+     ZIXIAO LABORATORIES
+               +############+      DOCS / PUBLISH
+               +#############
+           ######################+
+               +#############
+             +######+   ######+
+            +#######+   ########
+          +########+    +########+
+          """)
+
+          raw_origin = os.environ.get("PORTAL_ORIGIN", "")
+          origin = urlsplit(raw_origin)
+          if (origin.scheme != "https" or not re.fullmatch(r"(?:[a-z0-9-]+\.)*zixiaolabs\.com", origin.netloc)
+              or origin.path not in ("", "/") or origin.query or origin.fragment):
+              raise SystemExit("PORTAL_ORIGIN must use HTTPS on zixiaolabs.com or its subdomains.")
+          endpoint = f"https://{origin.netloc}/api/publish"
+          token = os.environ.get("PORTAL_PUBLISH_TOKEN", "")
+          if not re.fullmatch(r"zxp_[A-Za-z0-9_-]{43}", token):
+              raise SystemExit("PORTAL_PUBLISH_TOKEN is missing or invalid.")
+
+          paths = subprocess.check_output(["git", "ls-files", "-z", "--", "docs/"])
+          ignored = subprocess.run(
+              ["git", "-c", f"core.excludesFile={Path('.docsignore').absolute()}",
+               "check-ignore", "--no-index", "-z", "--stdin"],
+              input=paths, capture_output=True
+          )
+          if ignored.returncode not in (0, 1):
+              raise SystemExit("Unable to apply .docsignore.")
+          excluded = set(ignored.stdout.split(b"\0"))
+          files = []
+          for raw_path in paths.split(b"\0"):
+              if not raw_path or raw_path in excluded:
+                  continue
+              path = Path(os.fsdecode(raw_path))
+              if path.suffix not in (".md", ".mdx", ".html"):
+                  continue
+              if path.is_symlink() or any(parent.is_symlink() for parent in path.parents) or not path.is_file():
+                  raise SystemExit("Documents must be regular files, not symlinks.")
+              if path.stat().st_size > 480_000 or len(files) >= 250:
+                  raise SystemExit("Document limit exceeded.")
+              files.append({"path": path.relative_to("docs").as_posix(), "content": path.read_text(encoding="utf-8")})
+          payload = json.dumps({"files": files}, ensure_ascii=False).encode("utf-8")
+          if not files or len(payload) > 2 * 1024 * 1024:
+              raise SystemExit("Publish 1–250 documents and at most 2 MiB of JSON.")
+
+          # Never forward an Authorization header to a redirected host.
+          class NoRedirect(HTTPRedirectHandler):
+              def redirect_request(self, *args, **kwargs):
+                  return None
+
+          opener = build_opener(NoRedirect)
+          request = Request(os.environ["ACTIONS_ID_TOKEN_REQUEST_URL"] + "&" + urlencode({"audience": endpoint}),
+                            headers={"Authorization": "Bearer " + os.environ["ACTIONS_ID_TOKEN_REQUEST_TOKEN"]})
+          try:
+              with opener.open(request, timeout=15) as response:
+                  assertion = json.load(response)["value"]
+              request = Request(endpoint, data=payload, method="POST", headers={
+                  "Content-Type": "application/json",
+                  "Authorization": "Bearer " + token,
+                  "X-GitHub-Actions-OIDC": assertion,
+              })
+              with opener.open(request, timeout=60) as response:
+                  result = json.load(response)
+                  print(f"Published {result['count']} documents to /docs/{result['collection']}/…")
+          except HTTPError as error:
+              if error.url == endpoint:
+                  try:
+                      message = json.loads(error.read(4096))["error"]
+                      print("Portal response: " + json.dumps(str(message)[:500], ensure_ascii=True))
+                  except (ValueError, KeyError, TypeError):
+                      pass
+              raise SystemExit(f"Publish request failed: HTTP {error.code}")
+          PY
