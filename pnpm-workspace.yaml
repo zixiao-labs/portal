@@ -1,0 +1,23 @@
+allowBuilds:
+  '@vgpu/adapter-node': true
+  webgpu: true
+minimumReleaseAgeExclude:
+  - '@tanstack/query-core@5.108.4'
+  - '@tanstack/query-devtools@5.108.4'
+  - '@tanstack/react-query-devtools@5.108.4'
+  - '@tanstack/react-query@5.108.4'
+  - '@nasti-toolchain/nasti@2.11.0'
+  - '@zixiao-labs/ui-kits-react@0.2.1'
+permissions:
+  '@nasti-toolchain/nasti':
+    skills: true
+  '@tanstack/react-router':
+    skills: [router-query, migrate-from-react-router, react-router]
+  '@tanstack/react-start':
+    skills: [migrate-from-nextjs, react-start]
+  '@zixiao-labs/ui-kits-react':
+    skills: true
+skills:
+  dirs:
+    - .agents/skills
+    - .claude/skills
