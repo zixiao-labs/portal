@@ -3,7 +3,8 @@ import type { ReactNode } from 'react'
 import '@zixiao-labs/ui-kits-react/styles.css'
 import '../portal.css'
 import logo from '../../assets/zixiao-logo-2.svg?url'
-import { Header, ThemeScope } from '../ui/shell'
+import { appearanceScript, defaults, paletteCss } from '../ui/appearance'
+import { Footer, Header } from '../ui/shell'
 
 export const Route = createRootRoute({
   head: () => ({
@@ -35,18 +36,26 @@ export const Route = createRootRoute({
 
 function RootDocument({ children }: { children: ReactNode }) {
   return (
-    <html lang="zh-CN">
+    // The head script sets the actual theme attributes before React hydrates.
+    <html
+      lang="zh-CN"
+      data-zx-style={defaults.style}
+      data-zx-color-mode="light"
+      data-portal-palette={defaults.palette}
+      suppressHydrationWarning
+    >
       <head>
+        <script dangerouslySetInnerHTML={{ __html: appearanceScript }} />
+        <style>{paletteCss}</style>
         <HeadContent />
       </head>
       <body>
-        <ThemeScope>
-          <a className="skip-link" href="#main">
-            跳到主内容
-          </a>
-          <Header />
-          {children}
-        </ThemeScope>
+        <a className="skip-link" href="#main">
+          跳到主内容
+        </a>
+        <Header />
+        {children}
+        <Footer />
         <Scripts />
       </body>
     </html>

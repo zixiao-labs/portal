@@ -36,7 +36,13 @@ beforeAll(async () => {
         jwtId: 'test-jwt',
         expires: time + 600,
       },
-      [await renderArticle('guide/start.md', '# Handbook\n\nThis document is publicly available.')],
+      [
+        await renderArticle(
+          'guide/start.md',
+          '# Handbook\n\nThis document is publicly available.\n\n' +
+            '> Start with the [document library](/docs).\n\n```sh\npnpm install\n```\n',
+        ),
+      ],
       () => true,
       db,
     )
@@ -56,8 +62,16 @@ afterAll(async () => {
   if (dir) await rm(dir, { force: true, recursive: true })
 })
 
+async function expectMode(page: Page, mode: 'dark' | 'light') {
+  await page.locator(`html[data-zx-color-mode="${mode}"]`).waitFor({ state: 'attached' })
+  expect(await page.locator('html').evaluate((html) => getComputedStyle(html).colorScheme)).toBe(
+    mode,
+  )
+}
+
 // Snapshot a downsampled PNG, not the DOM: broad layout and palette changes are
 // caught, while tiny platform-dependent CJK glyph and AA differences are ignored.
+// Dark snapshots also distinguish the canvas (:) from raised panels (+).
 async function screenshot(page: Page, name: string) {
   const image = PNG.sync.read(
     await page.screenshot({
@@ -66,10 +80,13 @@ async function screenshot(page: Page, name: string) {
       fullPage: false,
     }),
   )
+  const darkMode = (await page.locator('html').getAttribute('data-zx-color-mode')) === 'dark'
   const rows = []
   for (let y = 0; y < 18; y++) {
     let row = ''
     for (let x = 0; x < 24; x++) {
+      let canvas = 0
+      let raised = 0
       let dark = 0
       let purple = 0
       let paper = 0
@@ -86,14 +103,20 @@ async function screenshot(page: Page, name: string) {
         ) {
           const offset = 4 * (py * image.width + px)
           const [r, g, b] = image.data.subarray(offset, offset + 3)
+          if (darkMode && r < 26 && g < 23 && b < 26) canvas++
+          else if (darkMode && r < 42 && g < 40 && b < 44) raised++
           if (r < 125 && g < 100 && b < 160) dark++
           else if (b > g + 45 && b > r + 25) purple++
           else if (r > 245 && g > 245 && b > 245) paper++
           count++
         }
       }
-      row +=
-        dark / count > 0.7 ? '#' : purple / count > 0.55 ? 'P' : paper / count > 0.8 ? '.' : ' '
+      if (canvas / count > 0.8) row += ':'
+      else if (raised / count > 0.8) row += '+'
+      else if (dark / count > 0.7) row += '#'
+      else if (purple / count > 0.55) row += 'P'
+      else if (paper / count > 0.8) row += '.'
+      else row += ' '
     }
     rows.push(`|${row}|`)
   }
@@ -130,6 +153,77 @@ test('desktop and mobile login keep the GitHub action visible and themed', async
   }
 })
 
+test('system dark login keeps the form usable on desktop and mobile', async () => {
+  for (const [name, viewport] of [
+    ['login-desktop-dark', { width: 1440, height: 900 }],
+    ['login-mobile-dark', { width: 390, height: 844 }],
+  ] as const) {
+    const page = await browser!.newPage({ viewport, colorScheme: 'dark', reducedMotion: 'reduce' })
+    try {
+      await page.goto(`${origin}/login`)
+      await expectMode(page, 'dark')
+      const action = await page.getByRole('link', { name: '使用 GitHub 继续' }).boundingBox()
+      expect(action!.y + action!.height).toBeLessThan(viewport.height)
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(viewport.width)
+      await page.getByLabel('工作邮箱').fill('visitor@example.org')
+      await page.getByRole('button', { name: '发送验证码' }).click()
+      expect(await page.getByRole('alert').textContent()).toContain('仅限 @zixiaolabs.com')
+      await screenshot(page, name)
+    } finally {
+      await page.close()
+    }
+  }
+})
+
+test('appearance follows live system changes unless explicitly overridden', async () => {
+  const page = await browser!.newPage({ colorScheme: 'light' })
+  try {
+    await page.goto(`${origin}/login`)
+    await expectMode(page, 'light')
+    await page.emulateMedia({ colorScheme: 'dark' })
+    await expectMode(page, 'dark')
+    await page.locator('.appearance summary').click()
+    const mode = page.getByLabel('明暗')
+    expect(await mode.inputValue()).toBe('system')
+    await mode.selectOption('light')
+    await expectMode(page, 'light')
+    await page.reload()
+    await expectMode(page, 'light')
+    await page.locator('.appearance summary').click()
+    await mode.locator('option[value="light"]:checked').waitFor({ state: 'attached' })
+    await mode.selectOption('system')
+    await expectMode(page, 'dark')
+    await page.emulateMedia({ colorScheme: 'light' })
+    await expectMode(page, 'light')
+  } finally {
+    await page.close()
+  }
+})
+
+test('the initial document uses the system or saved appearance before hydration', async () => {
+  const page = await browser!.newPage({ colorScheme: 'dark' })
+  try {
+    await page.route('**/assets/*.js', (route) => route.abort())
+    await page.goto(`${origin}/login`)
+    await expectMode(page, 'dark')
+    const canvas = () =>
+      page.locator('html').evaluate((html) => getComputedStyle(html).backgroundColor)
+    expect(await canvas()).toBe('rgb(22, 18, 23)')
+    await page.evaluate(() =>
+      localStorage.setItem(
+        'zixiao-portal-appearance',
+        JSON.stringify({ palette: 'native', style: 'endfield', dark: false }),
+      ),
+    )
+    await page.reload()
+    await expectMode(page, 'light')
+    expect(await page.locator('html').getAttribute('data-zx-style')).toBe('endfield')
+    expect(await canvas()).toBe('rgb(242, 242, 240)')
+  } finally {
+    await page.close()
+  }
+})
+
 test('public documents render with SEO, route to an article, and can be searched', async () => {
   const page = await browser!.newPage({ viewport: { width: 1440, height: 900 } })
   try {
@@ -146,8 +240,13 @@ test('public documents render with SEO, route to an article, and can be searched
     await page.getByLabel('搜索文档').fill('does not exist')
     expect(await page.getByRole('status').textContent()).toContain('没有与')
     await page.getByLabel('搜索文档').fill('handbook')
+    await page.emulateMedia({ colorScheme: 'dark' })
+    await expectMode(page, 'dark')
+    await screenshot(page, 'docs-desktop-dark')
     await page.getByRole('link', { name: /Handbook/ }).click()
     await page.getByRole('heading', { name: 'Handbook', exact: true }).waitFor()
+    await expectMode(page, 'dark')
+    await screenshot(page, 'article-desktop-dark')
     expect(await page.locator('link[rel="canonical"]').getAttribute('href')).toBe(
       'https://portal.zixiaolabs.com/docs/handbook/guide/start',
     )
@@ -177,6 +276,9 @@ test('the client-only account gates its data, issues a single-display token and 
     await page.goto(`${origin}/account`)
     await page.getByText('employee@zixiaolabs.com').waitFor()
     await screenshot(page, 'account-desktop')
+    await page.emulateMedia({ colorScheme: 'dark' })
+    await expectMode(page, 'dark')
+    await screenshot(page, 'account-desktop-dark')
     await page.getByLabel('GitHub 仓库').fill('zixiao-labs/handbook')
     await page.getByRole('button', { name: '创建发布 Token' }).click()
     const shown = page.locator('.issued-secret code')

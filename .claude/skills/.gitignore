@@ -1,4 +1,5 @@
 # pnpm
+/lightning
 /migrate-from-nextjs
 /migrate-from-react-router
 /nasti

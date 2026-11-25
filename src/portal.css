@@ -1,7 +1,22 @@
 :root {
+  --page-width: 1160px;
+  --pad: clamp(20px, 4vw, 48px);
+  --mono: ui-monospace, SFMono-Regular, Consolas, monospace;
+  --serif: 'Songti SC', 'Noto Serif CJK SC', 'SimSun', Georgia, serif;
+  --error: #9b2638;
+  --mark: var(--zx-accent-ink);
+  background: var(--zx-surface);
+  color: var(--zx-text);
   font-family: system-ui, 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
+}
+:root[data-zx-color-mode='dark'] {
+  --error: #ffb4bc;
+}
+:root[data-portal-palette='zixiao'][data-zx-color-mode='dark'] {
+  /* The dark brand purple needs a boundary against the charcoal surfaces. */
+  --zx-solid-border: var(--zx-control-border);
 }
 
 *,
@@ -10,6 +25,9 @@
   box-sizing: border-box;
 }
 body {
+  display: flex;
+  min-height: 100svh;
+  flex-direction: column;
   margin: 0;
 }
 a {
@@ -25,24 +43,6 @@ select {
   outline-offset: 4px;
 }
 
-.theme-scope {
-  --page-width: 1160px;
-  --pad: clamp(20px, 4vw, 48px);
-  --mono: ui-monospace, SFMono-Regular, Consolas, monospace;
-  --serif: 'Songti SC', 'Noto Serif CJK SC', 'SimSun', Georgia, serif;
-  --ink: #221932;
-  --error: #9b2638;
-  --mark: var(--zx-accent-ink);
-  display: flex;
-  min-height: 100svh;
-  flex-direction: column;
-  background: var(--zx-surface);
-  color: var(--zx-text);
-}
-.theme-scope[data-zx-color-mode='dark'] {
-  color-scheme: dark;
-  --error: #ffb4bc;
-}
 .skip-link {
   position: fixed;
   z-index: 5;
@@ -183,7 +183,7 @@ select {
   margin: 0;
   padding: clamp(24px, 3.4vw, 46px);
   color: #f1e8ff;
-  background: radial-gradient(ellipse at 55% 40%, #442f62, transparent 68%), var(--ink);
+  background: radial-gradient(ellipse at 55% 40%, #442f62, transparent 68%), #221932;
 }
 .plate-index {
   display: flex;
@@ -282,6 +282,9 @@ h2 {
   font-size: 15px;
   font-weight: 650;
   text-decoration: none;
+}
+:root[data-portal-palette='zixiao'][data-zx-color-mode='dark'] .github-button {
+  box-shadow: inset 0 0 0 1px var(--zx-solid-border);
 }
 .github-button:hover {
   background: var(--zx-accent-hover);
