@@ -12,6 +12,7 @@
     "dev": "node --env-file-if-exists=.env scripts/dev.mjs",
     "build": "nasti build",
     "start": "node --env-file-if-exists=.env scripts/start.mjs",
+    "smtp:check": "node --env-file-if-exists=.env scripts/check-smtp.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "oxlint src scripts tests",
     "format": "oxfmt src scripts tests nasti.config.ts lightning.config.ts",

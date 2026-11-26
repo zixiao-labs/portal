@@ -75,7 +75,11 @@ Nasti 2.11 的 Start 热更新暂时关闭；源文件变化后重新加载浏�
 
 ### 阿里企业邮箱（不用 25 端口）
 
-中国大陆站点使用 `smtp.qiye.aliyun.com:465`，隐式 TLS；非大陆站点按[阿里邮箱文档](https://www.alibabacloud.com/help/en/alibaba-mail/latest/alibaba-mail-imap-pop-smtp-address-and-port-information)选实际主机。启用服务邮箱的第三方客户端权限，使用客户端专用密码。配置 `SMTP_URL=smtps://<编码后的邮箱>:<编码后的客户端密码>@smtp.qiye.aliyun.com:465`，`SMTP_FROM` 填该邮箱或已授权发件地址。防火墙放行 TCP 465 出站即可，不要求开放 TCP 25。部署后请测试验证码接收，并配置 SPF/DKIM/DMARC。
+1. 按[阿里邮箱 SMTP 程序发信文档](https://help.aliyun.com/zh/document_detail/36687.html)启用发信邮箱的第三方客户端 SMTP 权限，并生成客户端安全密码。中国大陆站点用 `smtp.qiye.aliyun.com:465`（隐式 TLS）；非大陆站点按[服务器地址表](https://www.alibabacloud.com/help/en/alibaba-mail/latest/alibaba-mail-imap-pop-smtp-address-and-port-information)选对应主机。只需放行 TCP 465 出站，无需开放 TCP 25。
+2. 在服务端设置 `SMTP_URL=smtps://<编码后的完整邮箱>:<编码后的客户端安全密码>@smtp.qiye.aliyun.com:465`。用户名和密码分别做 URL 百分号编码，例如邮箱中的 `@` 写成 `%40`；不要编码整条 URL，也不要提交真实凭据。`SMTP_FROM` 填同一邮箱或已授权的发件地址，可用 `紫霄实验室 <portal@zixiaolabs.com>` 格式。若改用支持 STARTTLS 的服务商，可以用 `smtp://`（默认 587）；门户无论部署环境都要求 SMTP 连接经过 TLS。
+3. 在部署环境执行 `pnpm smtp:check`（容器内可用 `docker exec zixiao-portal pnpm smtp:check`）检查连接、TLS 证书和 SMTP 认证，不会发送邮件。通过后在 `/login` 用一个 `@zixiaolabs.com` 邮箱实测收信和验证码登录。`EAUTH` 优先检查客户端权限和安全密码；连接错误先检查主机、出站端口和证书；检查通过但出现 `EENVELOPE` 时检查 `SMTP_FROM` 的发件权限和收件地址。SMTP 接收成功并不保证到达收件箱；还应检查垃圾箱并配置 SPF、DKIM 和 DMARC。
+
+阿里邮箱建议批量或高频系统通知使用独立的邮件推送服务；本配置仅用于员工登录验证码。
 
 ### GitHub Actions：组织内文档发布
 

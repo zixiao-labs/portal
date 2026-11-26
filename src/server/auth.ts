@@ -3,6 +3,7 @@ import nodemailer from 'nodemailer'
 import { employeeDomain } from '../deployment.mjs'
 import { config } from './config'
 import { cookie, cookieName, hash, HttpError, json, opaque, setCookie } from './http'
+import { smtpFailure, smtpSettings } from './smtp.mjs'
 import { store, transaction, type User } from './store'
 
 const sessionAge = 7 * 86400
@@ -91,22 +92,14 @@ function codeHash(secret: string, email: string, browser: string, code: string) 
 export async function sendCode(body: Record<string, unknown>) {
   const cfg = config()
   const email = employeeLoginEmail(body.email)
-  if (!cfg.smtpUrl || !cfg.smtpFrom)
+  let smtp
+  try {
+    smtp = smtpSettings(cfg.smtpUrl, cfg.smtpFrom)
+  } catch (error) {
+    if (cfg.smtpUrl || cfg.smtpFrom)
+      console.error('Portal SMTP configuration error:', smtpFailure(error))
     throw new HttpError(503, '邮箱服务未配置，请使用 GitHub 登录。')
-  const smtp = new URL(cfg.smtpUrl)
-  const secure = smtp.protocol === 'smtps:'
-  const transport = nodemailer.createTransport({
-    host: smtp.hostname,
-    port: Number(smtp.port || (secure ? 465 : 587)),
-    secure,
-    requireTLS: !cfg.origin.startsWith('http:'),
-    auth: smtp.username
-      ? { user: decodeURIComponent(smtp.username), pass: decodeURIComponent(smtp.password) }
-      : undefined,
-    connectionTimeout: 10_000,
-    greetingTimeout: 10_000,
-    socketTimeout: 15_000,
-  })
+  }
   const db = store()
   const time = now()
   const browser = opaque()
@@ -133,13 +126,15 @@ export async function sendCode(body: Record<string, unknown>) {
     )
   })
   try {
+    const transport = nodemailer.createTransport(smtp.options)
     await transport.sendMail({
-      from: cfg.smtpFrom,
+      from: smtp.from,
       to: email,
       subject: '紫霄实验室登录验证码',
       text: `你的登录验证码为 ${code}，10 分钟内有效。如果这不是你的操作，可以忽略此邮件。`,
     })
-  } catch {
+  } catch (error) {
+    console.error('Portal SMTP send failed:', smtpFailure(error))
     db.prepare('DELETE FROM email_codes WHERE email=? AND browser_hash=?').run(email, hash(browser))
     throw new HttpError(503, '暂时无法发送邮件，请稍后再试。')
   }
