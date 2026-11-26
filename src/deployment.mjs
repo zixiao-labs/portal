@@ -1,4 +1,4 @@
-export const canonicalOrigin = 'https://portal.zixiaolabs.com'
+export const canonicalOrigin = 'https://zixiaolabs.com'
 export const organization = 'zixiao-labs'
 export const employeeDomain = 'zixiaolabs.com'
 

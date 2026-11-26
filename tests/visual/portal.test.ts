@@ -229,6 +229,15 @@ test('the initial document uses the system or saved appearance before hydration'
   }
 })
 
+test('the site root redirects permanently to the canonical login page', async () => {
+  const root = await fetch(`${origin}/`, { redirect: 'manual' })
+  expect(root.status).toBe(301)
+  expect(new URL(root.headers.get('location')!, origin).pathname).toBe('/login')
+  const login = await fetch(`${origin}/login`)
+  expect(login.status).toBe(200)
+  expect(await login.text()).toContain('href="https://zixiaolabs.com/login"')
+})
+
 test('public documents render with SEO, route to an article, and can be searched', async () => {
   const page = await browser!.newPage({ viewport: { width: 1440, height: 900 } })
   try {
@@ -253,7 +262,7 @@ test('public documents render with SEO, route to an article, and can be searched
     await expectMode(page, 'dark')
     await screenshot(page, 'article-desktop-dark')
     expect(await page.locator('link[rel="canonical"]').getAttribute('href')).toBe(
-      'https://portal.zixiaolabs.com/docs/handbook/guide/start',
+      'https://zixiaolabs.com/docs/handbook/guide/start',
     )
     expect(await (await fetch(`${origin}/sitemap.xml`)).text()).toContain(
       '/docs/handbook/guide/start',

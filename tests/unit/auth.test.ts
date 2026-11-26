@@ -55,18 +55,20 @@ test('email delivery errors are private and can be retried; the sent code logs i
   })
   const createTransport = vi.spyOn(nodemailer, 'createTransport').mockReturnValue({ sendMail })
   const log = vi.spyOn(console, 'error').mockImplementation(() => {})
-  vi.stubEnv('SMTP_FROM', '紫霄实验室 <portal@zixiaolabs.com>')
-  vi.stubEnv('SMTP_URL', 'smtps://user:bad%ZZ@smtp.qiye.aliyun.com')
+  vi.stubEnv('SMTP_HOST', 'smtp.qiye.aliyun.com')
+  vi.stubEnv('SMTP_USER', 'portal@zixiaolabs.com')
+  vi.stubEnv('SMTP_FROM_NAME', '紫霄实验室')
+  vi.stubEnv('SMTP_PASSWORD', '')
   try {
     const invalid = await post(path, body)
     expect(invalid.status).toBe(503)
     expect(invalid.headers.getSetCookie()).toEqual([])
     expect(log.mock.calls).toEqual([
-      ['Portal SMTP configuration error:', 'SMTP_URL credentials must use valid percent encoding'],
+      ['Portal SMTP configuration error:', 'SMTP_PASSWORD must be a non-empty, single-line value'],
     ])
     expect(createTransport).not.toHaveBeenCalled()
 
-    vi.stubEnv('SMTP_URL', 'smtps://portal%40zixiaolabs.com:test-password@smtp.qiye.aliyun.com:465')
+    vi.stubEnv('SMTP_PASSWORD', 'test#password@%ZZ:/=')
     expect((await post(path, { email: 'reader@example.org' })).status).toBe(403)
     expect(createTransport).not.toHaveBeenCalled()
 
@@ -82,7 +84,12 @@ test('email delivery errors are private and can be retried; the sent code logs i
     const sent = await post(path, body)
     expect(sent.status).toBe(200)
     expect(createTransport).toHaveBeenLastCalledWith(
-      expect.objectContaining({ host: 'smtp.qiye.aliyun.com', port: 465, secure: true }),
+      expect.objectContaining({
+        host: 'smtp.qiye.aliyun.com',
+        port: 465,
+        secure: true,
+        auth: { user: 'portal@zixiaolabs.com', pass: 'test#password@%ZZ:/=' },
+      }),
     )
     const message = messages[1]
     expect(message).toMatchObject({

@@ -4,6 +4,7 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -19,7 +20,75 @@ jobs:
       - run: npm install --global pnpm@12.21.0
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
+      - name: Check deployment script syntax
+        run: |
+          bash -n scripts/send-portal-deployment.sh
+          bash -n scripts/deploy-portal.sh
       - run: pnpm build
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm test:visual
+
+  deploy:
+    name: Deploy production portal
+    needs: verify
+    if: >-
+      github.repository == 'zixiao-labs/portal' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      vars.PORTAL_DEPLOY_ENABLED == 'true'
+    runs-on: ${{ vars.PORTAL_DEPLOY_ARCH == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    environment:
+      name: production
+      url: https://zixiaolabs.com
+    concurrency:
+      group: portal-production
+      cancel-in-progress: false
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Build the production image
+        run: docker build --tag "zixiao-portal:$GITHUB_SHA" .
+      - name: Skip commits superseded while CI was running
+        id: current
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          head_sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)
+          if [[ "$head_sha" == "$GITHUB_SHA" ]]; then
+            echo 'deploy=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'Skipping an older commit; main has moved on.'
+          fi
+      - name: Deploy over SSH
+        if: steps.current.outputs.deploy == 'true'
+        env:
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ vars.DEPLOY_PORT }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+          PORTAL_SECRET: ${{ secrets.PORTAL_SECRET }}
+          GITHUB_CLIENT_ID: ${{ secrets.PORTAL_GITHUB_CLIENT_ID }}
+          GITHUB_CLIENT_SECRET: ${{ secrets.PORTAL_GITHUB_CLIENT_SECRET }}
+          GITHUB_ORG_ID: ${{ secrets.PORTAL_GITHUB_ORG_ID }}
+          SMTP_HOST: ${{ vars.SMTP_HOST }}
+          SMTP_PORT: ${{ vars.SMTP_PORT }}
+          SMTP_TLS_MODE: ${{ vars.SMTP_TLS_MODE }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_FROM: ${{ vars.SMTP_FROM }}
+          SMTP_FROM_NAME: ${{ vars.SMTP_FROM_NAME }}
+        run: bash scripts/send-portal-deployment.sh "$GITHUB_SHA"
+      - name: Verify public HTTPS
+        if: steps.current.outputs.deploy == 'true'
+        run: |
+          status=$(curl --fail --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            --retry 12 --retry-all-errors --retry-delay 5 --max-time 10 --retry-max-time 120 \
+            https://zixiaolabs.com/login)
+          if [[ "$status" != 200 ]]; then
+            echo "Expected HTTP 200 for the public login page, got $status." >&2
+            exit 1
+          fi

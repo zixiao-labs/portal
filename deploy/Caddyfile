@@ -1,0 +1,13 @@
+{
+	servers {
+		strict_sni_host on
+	}
+}
+
+zixiaolabs.com {
+	tls {
+		issuer acme https://acme-v02.api.letsencrypt.org/directory
+	}
+
+	reverse_proxy 127.0.0.1:3000
+}

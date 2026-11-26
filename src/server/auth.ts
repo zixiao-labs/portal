@@ -94,12 +94,11 @@ export async function sendCode(body: Record<string, unknown>) {
   const email = employeeLoginEmail(body.email)
   let smtp
   try {
-    smtp = smtpSettings(cfg.smtpUrl, cfg.smtpFrom)
+    smtp = smtpSettings()
   } catch (error) {
-    if (cfg.smtpUrl || cfg.smtpFrom)
-      console.error('Portal SMTP configuration error:', smtpFailure(error))
-    throw new HttpError(503, '邮箱服务未配置，请使用 GitHub 登录。')
+    console.error('Portal SMTP configuration error:', smtpFailure(error))
   }
+  if (!smtp) throw new HttpError(503, '邮箱服务未配置，请使用 GitHub 登录。')
   const db = store()
   const time = now()
   const browser = opaque()

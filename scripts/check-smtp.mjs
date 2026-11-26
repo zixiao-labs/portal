@@ -1,8 +1,8 @@
 import nodemailer from 'nodemailer'
-import { smtpFailure, smtpSettings } from '../src/server/smtp.mjs'
+import { requireSmtpSettings, smtpFailure } from '../src/server/smtp.mjs'
 
 try {
-  const { options } = smtpSettings(process.env.SMTP_URL, process.env.SMTP_FROM)
+  const { options } = requireSmtpSettings()
   await nodemailer.createTransport(options).verify()
   console.log('SMTP TLS and authentication verified. No email was sent.')
 } catch (error) {

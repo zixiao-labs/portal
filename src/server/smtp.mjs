@@ -15,58 +15,72 @@ const failureCodes = new Set([
 class SmtpSettingsError extends Error {}
 
 // Shared by the login handler, production startup and the SMTP connection check.
-export function smtpSettings(url, from) {
-  if (!url) throw new SmtpSettingsError('Missing SMTP_URL')
-  if (!from?.trim()) throw new SmtpSettingsError('Missing SMTP_FROM')
-  const smtp = URL.parse(url)
+export function smtpSettings(env = process.env) {
+  const {
+    SMTP_HOST: smtpHost,
+    SMTP_PORT: smtpPort,
+    SMTP_TLS_MODE: tlsMode,
+    SMTP_USER: user,
+    SMTP_PASSWORD: password,
+    SMTP_FROM: from,
+    SMTP_FROM_NAME: fromName,
+  } = env
+  if (env.SMTP_URL) {
+    throw new SmtpSettingsError('Replace SMTP_URL with SMTP_HOST, SMTP_USER and SMTP_PASSWORD')
+  }
+  if (![smtpHost, smtpPort, tlsMode, user, password, from, fromName].some(Boolean)) return
+
+  const host = smtpHost?.trim()
+  if (!host) throw new SmtpSettingsError('Missing SMTP_HOST')
   if (
-    !smtp ||
-    !/^smtps?:\/\//i.test(url) ||
-    /[\s?#]/u.test(url) ||
-    !smtp.hostname ||
-    (smtp.pathname !== '' && smtp.pathname !== '/')
+    !/^(?=.{1,253}$)(?![0-9.]+$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(
+      host,
+    )
   ) {
-    throw new SmtpSettingsError(
-      'SMTP_URL must be an smtp:// or smtps:// URL without a path, query or fragment',
-    )
+    throw new SmtpSettingsError('SMTP_HOST must be a DNS hostname, without a URL or port')
   }
 
-  const secure = smtp.protocol === 'smtps:'
-  const port = Number(smtp.port || (secure ? 465 : 587))
-  if (port === 0 || port === 25 || (!secure && port === 465)) {
-    throw new SmtpSettingsError(
-      'Use smtps:// for port 465 or smtp:// for STARTTLS (normally port 587), not port 25',
-    )
+  const mode = tlsMode?.trim() || 'implicit'
+  if (mode !== 'implicit' && mode !== 'starttls') {
+    throw new SmtpSettingsError('SMTP_TLS_MODE must be implicit or starttls')
   }
-  if (!smtp.username || !smtp.password)
-    throw new SmtpSettingsError('SMTP_URL must include a username and password')
-  let auth
-  try {
-    auth = { user: decodeURIComponent(smtp.username), pass: decodeURIComponent(smtp.password) }
-  } catch {
-    throw new SmtpSettingsError('SMTP_URL credentials must use valid percent encoding')
+  const secure = mode === 'implicit'
+  const portValue = smtpPort?.trim() || (secure ? '465' : '587')
+  const port = Number(portValue)
+  if (!/^\d{1,5}$/.test(portValue) || port < 1 || port > 65535 || port === 25) {
+    throw new SmtpSettingsError('SMTP_PORT must be an integer from 1 to 65535, excluding port 25')
+  }
+  if (!secure && port === 465) {
+    throw new SmtpSettingsError('SMTP_TLS_MODE must be implicit for port 465')
+  }
+  if (!user || /[\r\n]/.test(user)) {
+    throw new SmtpSettingsError('SMTP_USER must be a non-empty, single-line value')
+  }
+  if (!password || /[\r\n]/.test(password)) {
+    throw new SmtpSettingsError('SMTP_PASSWORD must be a non-empty, single-line value')
   }
 
-  const sender = from.trim()
-  const named = /^([^<>]+)<([^<>]+)>$/.exec(sender)
-  const address = (named?.[2] ?? sender).trim()
+  const sender = from || user
+  const address = sender.trim()
   if (
-    /[\r\n]/.test(from) ||
+    /[\r\n]/.test(sender) ||
     !/^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+$/i.test(address)
   ) {
-    throw new SmtpSettingsError('SMTP_FROM must specify one sender mailbox')
+    throw new SmtpSettingsError('SMTP_FROM must be a single email address (defaults to SMTP_USER)')
   }
-  const name = named?.[1].trim().replace(/^"(.*)"$/, '$1') ?? ''
+  if (fromName && /[\r\n]/.test(fromName)) {
+    throw new SmtpSettingsError('SMTP_FROM_NAME must be a single-line display name')
+  }
 
   return {
-    from: { name, address },
+    from: { name: fromName?.trim() ?? '', address },
     options: {
-      host: smtp.hostname.replace(/^\[(.*)\]$/, '$1'),
+      host,
       port,
       secure,
       requireTLS: !secure,
       tls: { rejectUnauthorized: true },
-      auth,
+      auth: { user, pass: password },
       forceAuth: true,
       dnsTimeout: 10_000,
       connectionTimeout: 10_000,
@@ -74,6 +88,12 @@ export function smtpSettings(url, from) {
       socketTimeout: 15_000,
     },
   }
+}
+
+export function requireSmtpSettings(env = process.env) {
+  const smtp = smtpSettings(env)
+  if (!smtp) throw new SmtpSettingsError('Missing SMTP_HOST, SMTP_USER and SMTP_PASSWORD')
+  return smtp
 }
 
 // Never include the provider's message or response text: it may contain private data.
