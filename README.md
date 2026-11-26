@@ -19,11 +19,10 @@ pnpm lint
 pnpm build       # 同时生成 src/routeTree.gen.ts；全新工作树先执行它或 pnpm dev
 pnpm typecheck
 pnpm test
-pnpm exec playwright install chromium
-pnpm test:visual # 使用已构建的产物，运行 Lightning 浏览器回归测试
+pnpm test:visual # 需要 Docker；在与 CI 相同的 Linux/amd64 容器中构建并运行视觉测试
 ```
 
-Nasti 2.11 的 Start 热更新暂时关闭；源文件变化后重新加载浏览器即可。视觉测试将原图写到 `artifacts/`；有意修改布局与配色后检查原图再运行 `pnpm test:visual --update` 更新基线。
+Nasti 2.11 的 Start 热更新暂时关闭；源文件变化后重新加载浏览器即可。视觉测试统一使用容器中的 Chromium 和字体，避免不同系统的渲染差异影响基线。原图写到 `artifacts/`；有意修改界面时，先检查原图，再运行 `pnpm test:visual --update` 更新基线。
 
 开发无需凭据即可查看登录页面和空文档库。若要连调 GitHub，单独注册一个回调为 `http://localhost:3000/api/auth/github/callback` 的 OAuth App。不要复制生产 OAuth 密钥到本地。使用 `.env.example` 作为配置参考；不测试邮件时可以不设置 `SMTP_URL` 和 `SMTP_FROM`。
 

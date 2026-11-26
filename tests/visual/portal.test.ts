@@ -46,6 +46,11 @@ beforeAll(async () => {
       () => true,
       db,
     )
+    // Keep the displayed publication date fixed while session expiry still uses real time.
+    db.prepare('UPDATE collections SET published=? WHERE name=?').run(
+      Date.parse('2026-01-01T00:00:00Z') / 1000,
+      'handbook',
+    )
   }
   const { default: handler } = await import(pathToFileURL(resolve('dist/server/server.mjs')).href)
   server = servePortal(handler, { origin, assets: resolve('dist/client') })

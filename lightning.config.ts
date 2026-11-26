@@ -29,6 +29,8 @@ export default defineConfig({
     },
   },
   test: {
+    // Nasti 2.11 workers loading nasti.config.ts in the same millisecond share a temp file.
+    maxWorkers: 1,
     projects: [
       { test: { name: 'unit', include: ['tests/unit/**/*.test.ts'] } },
       { test: { name: 'visual', include: ['tests/visual/**/*.test.ts'], testTimeout: 30_000 } },
