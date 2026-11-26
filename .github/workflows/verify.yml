@@ -14,6 +14,12 @@ jobs:
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Record the tested PR revision
+        if: github.event_name == 'pull_request'
+        run: |
+          printf 'portal-ci-tree: %s\n' "$(git rev-parse 'HEAD^{tree}')"
+          # Read raw parents even in the default shallow checkout.
+          git cat-file commit HEAD | awk '/^$/ { exit } /^parent / { parents = parents " " $2 } END { print "portal-ci-parents:" parents }'
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '24'

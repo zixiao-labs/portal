@@ -32,6 +32,12 @@ Nasti 2.11 的 Start 热更新暂时关闭；源文件变化后重新加载浏�
 
 [Verify portal](.github/workflows/verify.yml) 在 PR 和 `main` 上运行 CI。仅当 `zixiao-labs/portal` 的 `main` 通过检查并主动启用 CD 后，才会构建对应提交的 Docker 镜像并经 SSH 发送给服务器，不需要镜像仓库或 PAT。容器只发布到 `127.0.0.1:3000`。部署检查 `/login` 和读取 SQLite 的 `/sitemap.xml`，新容器未就绪会恢复旧容器，但不回退数据库。公网 HTTPS 单独检查，证书或代理故障不会触发应用回滚。
 
+### 从 Delta 自助上线
+
+在改动所在的 Delta 线程选择 **Merge → Merge Changes**，如有多个技能则选择 [`portal-release`](.delta/skills/portal-release/SKILL.md)。技能只在独立 Reviewer 子代理批准同一版本、且 PR 的 `Verify portal` 通过后合并到 `main`，再检查对应提交的生产部署结果。无法启动 Reviewer 或审查未通过时不会合并；请确认 Delta 的子代理委派未关闭。这个门槛只约束该技能，不拦截从 GitHub 或命令行绕过 Delta 的合并。
+
+首次使用前，在 GitHub 为 `main` 配置分支保护：将 `verify` 设为必需状态检查，要求分支在合并前跟上 `main`，并启用 **Do not allow bypassing the above settings**，让管理员也受约束。如果当前 GitHub 计划不支持或技能无法验证这些规则，技能会停止。它不会帮你绕过保护或改动 GitHub 设置。
+
 ### Ubuntu 24.04：服务器和 Let's Encrypt
 
 1. **DNS 与防火墙。** 裸域 `@` 的 `A` 记录已指向 `8.219.216.152`，仅部署裸域不需要新增记录，也不需要 `_acme-challenge` TXT。没有可用公网 IPv6 就不要保留 `AAAA`；若已有 CAA 限制，须允许 `letsencrypt.org`。仅在打算提供 `www` 或旧 `portal` 子域时，才为该主机名另配 DNS、TLS 和跳转。云安全组和主机防火墙均放行公网 TCP `80`/`443`，以及 Actions runner 到部署 SSH 端口；不要开放 `3000`。标准 GitHub-hosted runner 不保证固定出口 IP。
