@@ -43,11 +43,19 @@ test('only email-authenticated admins can manage users and multiple repositories
     expect((await send(users)).status).toBe(401)
     expect((await send(users, 'GET', member)).status).toBe(403)
     expect((await send(users, 'GET', reader)).status).toBe(403)
-    expect((await send(users, 'GET', sameAdminViaGithub)).status).toBe(403)
-    expect((await (await send('/api/account', 'GET', adminSession)).json()).admin).toBe(true)
-    expect(
-      (await (await send('/api/account', 'GET', sameAdminViaGithub)).json()).admin,
-    ).toBeUndefined()
+    const needsVerification = await send(users, 'GET', sameAdminViaGithub)
+    expect(needsVerification.status).toBe(403)
+    expect(await needsVerification.json()).toEqual({ error: '请先使用工作邮箱验证码验证身份。' })
+    const readAccount = async (cookie: string) => (await send('/api/account', 'GET', cookie)).json()
+    expect(await readAccount(adminSession)).toMatchObject({ adminAccess: 'granted', admin: true })
+    const githubAdminAccount = await readAccount(sameAdminViaGithub)
+    expect(githubAdminAccount.adminAccess).toBe('email-required')
+    expect(githubAdminAccount).not.toHaveProperty('admin')
+    for (const cookie of [member, reader]) {
+      const account = await readAccount(cookie)
+      expect(account).not.toHaveProperty('adminAccess')
+      expect(account).not.toHaveProperty('admin')
+    }
     expect(await (await send(`${users}?q=READER`, 'GET', adminSession)).json()).toEqual({
       users: [
         {
@@ -112,6 +120,16 @@ test('only email-authenticated admins can manage users and multiple repositories
     expect((await send(`${repos}/${first.id}`, 'DELETE', signedBackIn)).status).toBe(403)
     expect((await send(`${repos}/${first.id}`, 'DELETE', adminSession)).status).toBe(200)
     expect(canPublish(first.id, first.repository.toLowerCase())).toBe(false)
+    expect(canPublish(second.id, second.repository)).toBe(true)
+
+    vi.stubEnv('PORTAL_ADMIN_EMAILS', '')
+    for (const cookie of [adminSession, sameAdminViaGithub]) {
+      const account = await readAccount(cookie)
+      expect(account).not.toHaveProperty('adminAccess')
+      expect(account).not.toHaveProperty('admin')
+    }
+    expect((await send(users, 'GET', adminSession)).status).toBe(403)
+    expect((await send(`${repos}/${second.id}`, 'DELETE', adminSession)).status).toBe(403)
     expect(canPublish(second.id, second.repository)).toBe(true)
   } finally {
     db.close()

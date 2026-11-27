@@ -4,6 +4,7 @@ import { get, type Server } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import nodemailer, { type SendMailOptions } from 'nodemailer'
 import { chromium, type Browser, type Page } from 'playwright'
 import { PNG } from 'pngjs'
 import { servePortal } from '../../scripts/http.mjs'
@@ -12,8 +13,10 @@ import { newSession } from '../../src/server/session'
 import { openStore } from '../../src/server/store'
 
 const origin = 'http://127.0.0.1:4178'
+const admin = { id: 2, email: 'admin@zixiaolabs.com', employee: 1, github_id: '23456' }
 let session: string
 let adminSession: string
+let githubAdminSession: string
 let server: Server | undefined
 let browser: Browser | undefined
 let dir: string | undefined
@@ -26,13 +29,19 @@ beforeAll(async () => {
   process.env.PORTAL_SECRET = 'fake-browser-test-secret-not-used-in-production'
   process.env.GITHUB_CLIENT_ID = 'fake-client-id'
   process.env.GITHUB_CLIENT_SECRET = 'fake-client-secret'
-  process.env.PORTAL_ADMIN_EMAILS = 'admin@zixiaolabs.com'
+  process.env.PORTAL_ADMIN_EMAILS = admin.email
   process.env.SQLITE_PATH = join(dir, 'portal.sqlite')
   const time = Math.floor(Date.now() / 1000)
   {
     using db = openStore(process.env.SQLITE_PATH)
     db.prepare('INSERT INTO users VALUES (1, ?, 1, NULL)').run('employee@zixiaolabs.com')
-    db.prepare('INSERT INTO users VALUES (2, ?, 1, NULL)').run('admin@zixiaolabs.com')
+    db.prepare('INSERT INTO users VALUES (?, ?, ?, ?)').run(
+      admin.id,
+      admin.email,
+      admin.employee,
+      admin.github_id,
+    )
+    db.prepare('INSERT INTO employee_github_links VALUES (?)').run(admin.github_id)
     db.prepare('INSERT INTO users VALUES (3, ?, 0, ?)').run('reader@example.org', '12345')
     db.prepare('INSERT INTO publish_repositories VALUES (?, ?)').run('1', 'zixiao-labs/handbook')
     replaceCollection(
@@ -70,18 +79,8 @@ beforeAll(async () => {
       'email',
     )
   ).split(';')[0]
-  adminSession = (
-    await newSession(
-      new Request(origin),
-      {
-        id: 2,
-        email: 'admin@zixiaolabs.com',
-        employee: 1,
-        github_id: null,
-      },
-      'email',
-    )
-  ).split(';')[0]
+  adminSession = (await newSession(new Request(origin), admin, 'email')).split(';')[0]
+  githubAdminSession = (await newSession(new Request(origin), admin, 'github')).split(';')[0]
   const { default: handler } = await import(pathToFileURL(resolve('dist/server/server.mjs')).href)
   server = servePortal(handler, { origin, assets: resolve('dist/client') })
   await new Promise<void>((ok, fail) => {
@@ -362,6 +361,60 @@ test('the client-only account gates its data, links GitHub and invalidates the J
   } finally {
     vi.unstubAllGlobals()
     await page.close()
+  }
+})
+
+test('a GitHub-signed-in admin keeps the role and can verify their work email without logout', async () => {
+  const page = await browser!.newPage({ viewport: { width: 1440, height: 900 } })
+  let code: string | undefined
+  const mail = vi.spyOn(nodemailer, 'createTransport').mockReturnValue({
+    async sendMail(message: SendMailOptions) {
+      expect(message.to).toBe(admin.email)
+      code = String(message.text).match(/\d{6}/)?.[0]
+    },
+  })
+  vi.stubEnv('SMTP_HOST', 'smtp.example.org')
+  vi.stubEnv('SMTP_USER', 'portal@example.org')
+  vi.stubEnv('SMTP_PASSWORD', 'fake-browser-test-password')
+  try {
+    await page.context().addCookies([
+      {
+        name: 'portal_session',
+        value: githubAdminSession.split('=')[1],
+        url: origin,
+        httpOnly: true,
+      },
+    ])
+    await page.goto(`${origin}/admin`)
+    const verify = page.getByRole('link', { name: '验证工作邮箱' })
+    await verify.waitFor()
+    expect(await page.getByRole('navigation', { name: '后台模块' }).count()).toBe(0)
+    await page.getByRole('link', { name: '返回个人中心' }).click()
+    await page.getByText('管理员', { exact: true }).waitFor()
+    await verify.waitFor()
+    const adminLink = page.getByRole('link', { name: '管理后台' })
+    expect(await adminLink.count()).toBe(0)
+    await screenshot(page, 'account-admin-verification-desktop')
+
+    await verify.click()
+    await page.waitForURL('**/login#work-email')
+    await page.getByLabel('工作邮箱').fill(admin.email)
+    await page.getByRole('button', { name: '发送验证码' }).click()
+    const input = page.getByLabel('验证码')
+    await input.waitFor()
+    expect(code).toMatch(/^\d{6}$/)
+    await input.fill(code!)
+    await page.getByRole('button', { name: '验证并登录' }).click()
+    await page.waitForURL('**/account')
+    await adminLink.click()
+    await page.getByText('reader@example.org').waitFor()
+    expect(
+      (await fetch(`${origin}/api/account`, { headers: { cookie: githubAdminSession } })).status,
+    ).toBe(401)
+  } finally {
+    await page.close()
+    mail.mockRestore()
+    vi.unstubAllEnvs()
   }
 })
 

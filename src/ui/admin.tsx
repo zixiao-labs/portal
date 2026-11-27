@@ -1,6 +1,8 @@
 import { Link } from '@tanstack/react-router'
 import { Button, TextField } from '@zixiao-labs/ui-kits-react'
 import { useEffect, useState, type FormEvent } from 'react'
+import type { AccountInfo } from '../account-info'
+import { AdminVerification } from './admin-verification'
 import { requestJson, RequestError, userMessage } from './request'
 
 type View = 'users' | 'repositories'
@@ -61,14 +63,16 @@ function Feedback({ error, notice }: { error: string; notice?: string }) {
 }
 
 export function AdminPage({ view }: { view: View }) {
-  const [access, setAccess] = useState<'loading' | 'granted' | 'denied'>('loading')
+  const [access, setAccess] = useState<
+    NonNullable<AccountInfo['adminAccess']> | 'loading' | 'denied'
+  >('loading')
   const [error, setError] = useState('')
   useEffect(() => {
     const controller = new AbortController()
-    void requestJson<{ admin?: boolean }>('/api/account', 'GET', undefined, controller.signal)
-      .then(({ admin }) => {
-        setAccess(admin ? 'granted' : 'denied')
-        if (!admin) setError('请使用有管理权限的工作邮箱验证码登录。')
+    void requestJson<AccountInfo>('/api/account', 'GET', undefined, controller.signal)
+      .then(({ adminAccess }) => {
+        setAccess(adminAccess ?? 'denied')
+        if (!adminAccess) setError('当前账户没有管理权限。')
       })
       .catch((err: unknown) => {
         if (controller.signal.aborted) return
@@ -93,6 +97,7 @@ export function AdminPage({ view }: { view: View }) {
       </header>
       {access === 'loading' && <p role="status">正在检查管理权限…</p>}
       <Feedback error={error} />
+      {access === 'email-required' && <AdminVerification />}
       {access === 'granted' && (
         <>
           <nav className="admin-nav" aria-label="后台模块">

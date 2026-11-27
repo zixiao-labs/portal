@@ -1,4 +1,5 @@
-import { adminApi, canAdminister } from './admin'
+import type { AccountInfo } from '../account-info'
+import { adminAccess, adminApi } from './admin'
 import { checkCode, finishGithub, sendCode, startGithub } from './auth'
 import { config } from './config'
 import { checkOrigin, HttpError, json, readJson } from './http'
@@ -27,12 +28,15 @@ export async function api(request: Request, path: string) {
       const current = await session(request)
       if (!current) throw new HttpError(401, '请先登录。')
       const { user } = current
-      return json({
+      const access = adminAccess(current)
+      const account: AccountInfo = {
         email: user.email,
         employee: Boolean(user.employee),
         github: Boolean(user.github_id),
-        ...(canAdminister(current) ? { admin: true } : {}),
-      })
+        adminAccess: access,
+        ...(access === 'granted' ? { admin: true } : {}),
+      }
+      return json(account)
     }
     throw new HttpError(404, '未找到接口。')
   } catch (error) {
