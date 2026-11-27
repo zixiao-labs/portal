@@ -17,7 +17,7 @@ export default createServerEntry({
     if (url.pathname.startsWith('/api/')) return api(request, url.pathname)
     if (url.pathname === '/robots.txt')
       return new Response(
-        `User-agent: *\nDisallow: /api/\nDisallow: /account\nSitemap: ${origin}/sitemap.xml\n`,
+        `User-agent: *\nDisallow: /api/\nDisallow: /account\nDisallow: /admin\nSitemap: ${origin}/sitemap.xml\n`,
         { headers: { 'Content-Type': 'text/plain; charset=utf-8' } },
       )
     if (url.pathname === '/sitemap.xml') {
@@ -32,7 +32,7 @@ export default createServerEntry({
       )
     }
     const response = await render(request, options)
-    if (url.pathname === '/account') {
+    if (/^\/(?:account|admin)\/?$/.test(url.pathname)) {
       response.headers.set('X-Robots-Tag', 'noindex')
       response.headers.set('Cache-Control', 'private, no-store')
     }

@@ -1,4 +1,4 @@
-import { deploymentOrigin } from '../src/deployment.mjs'
+import { adminEmails, deploymentOrigin } from '../src/deployment.mjs'
 import { requireSmtpSettings } from '../src/server/smtp.mjs'
 import { servePortal } from './http.mjs'
 
@@ -10,6 +10,7 @@ if (Buffer.byteLength(process.env.PORTAL_SECRET) < 32)
   throw new Error('PORTAL_SECRET must be at least 32 bytes')
 requireSmtpSettings()
 if (!/^\d+$/.test(process.env.GITHUB_ORG_ID ?? '')) throw new Error('GITHUB_ORG_ID is required')
+adminEmails(process.env.PORTAL_ADMIN_EMAILS)
 process.env.NODE_ENV = 'production'
 process.env.PORTAL_RUNTIME_MODE = 'production'
 const { default: handler } = await import('../dist/server/server.mjs')

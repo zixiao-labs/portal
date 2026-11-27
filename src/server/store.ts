@@ -32,16 +32,24 @@ export function openStore(path: string) {
       hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       expires INTEGER NOT NULL
     );
+    CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id);
+    CREATE TABLE IF NOT EXISTS suspended_users (
+      user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS github_flows (
+      state_hash TEXT PRIMARY KEY, verifier_hash TEXT NOT NULL, expires INTEGER NOT NULL,
+      session_hash TEXT REFERENCES sessions(hash) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS github_flows_session ON github_flows(session_hash);
+    CREATE TABLE IF NOT EXISTS employee_github_links (
+      github_id TEXT NOT NULL PRIMARY KEY REFERENCES users(github_id) ON DELETE CASCADE
+    );
     CREATE TABLE IF NOT EXISTS email_codes (
       email TEXT PRIMARY KEY, hash TEXT NOT NULL, browser_hash TEXT NOT NULL, expires INTEGER NOT NULL,
       created INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE IF NOT EXISTS login_limits (
       bucket INTEGER PRIMARY KEY, count INTEGER NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS tokens (
-      id TEXT PRIMARY KEY, hash TEXT UNIQUE NOT NULL, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      repository TEXT NOT NULL, created INTEGER NOT NULL, expires INTEGER NOT NULL
     );
     CREATE TABLE IF NOT EXISTS collections (
       name TEXT PRIMARY KEY, repository TEXT UNIQUE NOT NULL, repository_id TEXT UNIQUE NOT NULL,
@@ -54,6 +62,9 @@ export function openStore(path: string) {
     );
     CREATE TABLE IF NOT EXISTS publish_runs (
       jwt_id TEXT PRIMARY KEY, expires INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS publish_repositories (
+      id TEXT NOT NULL PRIMARY KEY, repository TEXT NOT NULL UNIQUE
     );
   `)
   return db
@@ -88,4 +99,12 @@ export function findDocument(collection: string, slug: string, db = store()) {
     .prepare(`SELECT articles.*, repository, published FROM articles JOIN collections
     ON articles.collection = collections.name WHERE collection = ? AND slug = ?`)
     .get(collection, slug) as DocumentPage | undefined
+}
+
+export function canPublish(id: string, repository: string, db = store()) {
+  return Boolean(
+    db
+      .prepare('SELECT 1 FROM publish_repositories WHERE id=? AND repository=?')
+      .get(id, repository),
+  )
 }

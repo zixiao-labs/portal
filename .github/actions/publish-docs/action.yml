@@ -1,0 +1,16 @@
+name: Publish Zixiao portal documents
+description: Publish tracked docs from the current repository to the Zixiao portal using GitHub Actions OIDC.
+inputs:
+  portal-origin:
+    description: HTTPS origin of the Zixiao portal.
+    default: https://zixiaolabs.com
+runs:
+  using: composite
+  steps:
+    - name: Publish tracked documents
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        PORTAL_ORIGIN: ${{ inputs.portal-origin }}
+      run: python3 "$ACTION_PATH/publish.py"

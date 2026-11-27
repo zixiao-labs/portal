@@ -25,7 +25,7 @@ for key in "${required[@]}"; do
     exit 1
   fi
 done
-for key in "${required[@]}" SMTP_PORT SMTP_TLS_MODE SMTP_FROM SMTP_FROM_NAME; do
+for key in "${required[@]}" PORTAL_ADMIN_EMAILS SMTP_PORT SMTP_TLS_MODE SMTP_FROM SMTP_FROM_NAME; do
   value=${!key:-}
   if [[ $value == *$'\n'* || $value == *$'\r'* ]]; then
     printf '%s must be a single-line value.\n' "$key" >&2

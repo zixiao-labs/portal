@@ -33,6 +33,7 @@ jobs:
       - run: pnpm build
       - run: pnpm typecheck
       - run: pnpm test
+      - run: pnpm test:action
       - run: pnpm test:visual
 
   deploy:
@@ -80,6 +81,7 @@ jobs:
           GITHUB_CLIENT_ID: ${{ secrets.PORTAL_GITHUB_CLIENT_ID }}
           GITHUB_CLIENT_SECRET: ${{ secrets.PORTAL_GITHUB_CLIENT_SECRET }}
           GITHUB_ORG_ID: ${{ secrets.PORTAL_GITHUB_ORG_ID }}
+          PORTAL_ADMIN_EMAILS: ${{ secrets.PORTAL_ADMIN_EMAILS }}
           SMTP_HOST: ${{ vars.SMTP_HOST }}
           SMTP_PORT: ${{ vars.SMTP_PORT }}
           SMTP_TLS_MODE: ${{ vars.SMTP_TLS_MODE }}

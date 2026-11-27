@@ -8,7 +8,8 @@ const oauthErrors = {
   setup: 'GitHub 登录暂未配置。',
   github: 'GitHub 登录未完成，请重试。',
   email: '请先在 GitHub 验证主邮箱，再回来登录。',
-  account: 'GitHub 账户的主邮箱已变更或与现有账户不匹配。',
+  account: 'GitHub 主邮箱与门户账户有冲突。请用原方式登录，或联系管理员。',
+  suspended: '此账户已停用，请联系管理员。',
 }
 
 export function LoginPage({ oauthError }: { oauthError?: string }) {

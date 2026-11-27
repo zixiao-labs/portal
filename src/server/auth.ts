@@ -3,10 +3,10 @@ import nodemailer from 'nodemailer'
 import { employeeDomain } from '../deployment.mjs'
 import { config } from './config'
 import { cookie, cookieName, hash, HttpError, json, opaque, setCookie } from './http'
+import { activeSession, newSession, session } from './session'
 import { smtpFailure, smtpSettings } from './smtp.mjs'
 import { store, transaction, type User } from './store'
 
-const sessionAge = 7 * 86400
 const codeAge = 600
 const now = () => Math.floor(Date.now() / 1000)
 
@@ -35,52 +35,32 @@ export function employeeLoginEmail(value: unknown) {
   return email
 }
 
-export function verifiedUser(email: string, githubId?: string, db = store()) {
+export function verifiedEmailUser(email: string, db = store()) {
   return transaction(db, () => {
-    if (githubId) {
-      const known = db.prepare('SELECT email FROM users WHERE github_id = ?').get(githubId)
-      const existing = db.prepare('SELECT github_id FROM users WHERE email = ?').get(email)
-      if (
-        (known && known.email !== email) ||
-        (existing?.github_id && existing.github_id !== githubId)
-      ) {
-        throw new HttpError(409, 'GitHub 身份与现有账户不匹配，请用原邮箱登录。')
-      }
-    }
-    return db
-      .prepare(`INSERT INTO users(email, employee, github_id) VALUES (?, ?, ?)
-      ON CONFLICT(email) DO UPDATE SET github_id=coalesce(excluded.github_id, users.github_id)
-      RETURNING *`)
-      .get(email, Number(isEmployeeEmail(email)), githubId ?? null) as User
+    db.prepare(`INSERT INTO users(email, employee) VALUES (?, ?)
+      ON CONFLICT(email) DO NOTHING`).run(email, Number(isEmployeeEmail(email)))
+    return db.prepare('SELECT * FROM users WHERE email=?').get(email) as User
   })
 }
 
-export function sessionUser(request: Request) {
-  const token = cookie(request, cookieName(config().origin, 'session'))
-  if (!token) return
-  return store()
-    .prepare(`SELECT users.* FROM users JOIN sessions ON sessions.user_id=users.id
-    WHERE sessions.hash=? AND sessions.expires>?`)
-    .get(hash(token), now()) as User | undefined
+function userByGithubId(githubId: string, db = store()) {
+  return db.prepare('SELECT * FROM users WHERE github_id=?').get(githubId) as User | undefined
 }
 
-export function removeSession(request: Request) {
-  const { origin } = config()
-  const name = cookieName(origin, 'session')
-  const token = cookie(request, name)
-  if (token) store().prepare('DELETE FROM sessions WHERE hash=?').run(hash(token))
-  return setCookie(origin, name, '', 0)
-}
-
-function newSession(request: Request, user: User) {
-  const { origin } = config()
-  removeSession(request)
-  const token = opaque()
-  store().prepare('DELETE FROM sessions WHERE expires <= ?').run(now())
-  store()
-    .prepare('INSERT INTO sessions VALUES (?, ?, ?)')
-    .run(hash(token), user.id, now() + sessionAge)
-  return setCookie(origin, cookieName(origin, 'session'), token, sessionAge)
+export function registerGithubUser(email: string, githubId: string, db = store()) {
+  return transaction(db, () => {
+    const linked = userByGithubId(githubId, db)
+    if (linked) {
+      if (linked.email !== email) throw new HttpError(409, 'GitHub 主邮箱与原门户账户不匹配。')
+      return linked
+    }
+    const created = db
+      .prepare(`INSERT INTO users(email, employee, github_id) VALUES (?, ?, ?)
+        ON CONFLICT(email) DO NOTHING RETURNING *`)
+      .get(email, Number(isEmployeeEmail(email)), githubId) as User | undefined
+    if (!created) throw new HttpError(409, '此邮箱已有账户，请登录原账户后绑定 GitHub。')
+    return created
+  })
 }
 
 function codeHash(secret: string, email: string, browser: string, code: string) {
@@ -142,7 +122,7 @@ export async function sendCode(body: Record<string, unknown>) {
   ])
 }
 
-export function checkCode(request: Request, body: Record<string, unknown>) {
+export async function checkCode(request: Request, body: Record<string, unknown>) {
   const cfg = config()
   const email = employeeLoginEmail(body.email)
   const name = cookieName(cfg.origin, 'email')
@@ -171,39 +151,73 @@ export function checkCode(request: Request, body: Record<string, unknown>) {
   })
   if (!verified) throw new HttpError(400, '验证码错误、已过期或尝试次数已用完。')
   return json({ ok: true }, 200, [
-    newSession(request, verifiedUser(email)),
+    await newSession(request, verifiedEmailUser(email), 'email'),
     setCookie(cfg.origin, name, '', 0),
   ])
 }
 
 const callbackPath = '/api/auth/github/callback'
-export function startGithub() {
+const proofFormat = /^[A-Za-z0-9_-]{43}$/
+
+export async function startGithub(request: Request, link = false) {
   const cfg = config()
-  if (!cfg.clientId || !cfg.clientSecret)
+  const current = link ? await session(request) : undefined
+  if (link) {
+    if (!current) throw new HttpError(401, '请先登录。')
+    if (!current.user.employee || !isEmployeeEmail(current.user.email))
+      throw new HttpError(403, '仅员工可绑定 GitHub。')
+    if (current.user.github_id) throw new HttpError(409, '当前账户已绑定 GitHub。')
+  }
+  if (!cfg.clientId || !cfg.clientSecret) {
+    if (link) throw new HttpError(503, 'GitHub 授权暂未配置。')
     return Response.redirect(`${cfg.origin}/login?error=setup`, 303)
+  }
+
   const state = opaque()
   const verifier = opaque()
+  const challenge = hash(verifier)
+  const time = now()
+  const db = store()
+  db.prepare('DELETE FROM github_flows WHERE expires<=?').run(time)
+  db.prepare('INSERT INTO github_flows VALUES (?, ?, ?, ?)').run(
+    hash(state),
+    challenge,
+    time + codeAge,
+    current?.tokenHash ?? null,
+  )
+
   const url = new URL('https://github.com/login/oauth/authorize')
   url.search = new URLSearchParams({
     client_id: cfg.clientId,
     redirect_uri: cfg.origin + callbackPath,
     scope: 'user:email',
     state,
-    code_challenge: hash(verifier),
+    code_challenge: challenge,
     code_challenge_method: 'S256',
+    ...(link ? { prompt: 'select_account' } : {}),
   }).toString()
+  const proof = setCookie(cfg.origin, cookieName(cfg.origin, 'oauth'), verifier, codeAge)
+  if (link) return json({ url: url.href }, 200, [proof])
   return new Response(null, {
     status: 303,
     headers: {
       Location: url.href,
       'Cache-Control': 'no-store',
-      'Set-Cookie': setCookie(
-        cfg.origin,
-        cookieName(cfg.origin, 'oauth'),
-        `${state}.${verifier}`,
-        codeAge,
-      ),
+      'Set-Cookie': proof,
     },
+  })
+}
+
+function linkGithub(tokenHash: string, userId: string, githubId: string) {
+  const db = store()
+  transaction(db, () => {
+    const user = activeSession(tokenHash, userId)
+    if (!user?.employee || !isEmployeeEmail(user.email))
+      throw new HttpError(403, '员工会话已失效。')
+    if (user.github_id || userByGithubId(githubId, db))
+      throw new HttpError(409, '该 GitHub 账户已关联门户账户。')
+    db.prepare('UPDATE users SET github_id=? WHERE id=?').run(githubId, user.id)
+    db.prepare('INSERT INTO employee_github_links VALUES (?)').run(githubId)
   })
 }
 
@@ -212,28 +226,33 @@ export async function finishGithub(request: Request) {
   const name = cookieName(cfg.origin, 'oauth')
   const clear = setCookie(cfg.origin, name, '', 0)
   const url = new URL(request.url)
-  const [state, verifier] = (cookie(request, name) || '').split('.')
+  const verifier = cookie(request, name) || ''
+  const state = url.searchParams.get('state') || ''
   const code = url.searchParams.get('code')
-  const redirect = (path: string, session?: string) => {
+  const redirect = (path: string, issued?: string) => {
     const headers = new Headers({ Location: cfg.origin + path, 'Cache-Control': 'no-store' })
     headers.append('Set-Cookie', clear)
-    if (session) headers.append('Set-Cookie', session)
+    if (issued) headers.append('Set-Cookie', issued)
     return new Response(null, { status: 303, headers })
   }
-  if (
-    !code ||
-    !state ||
-    !verifier ||
-    state !== url.searchParams.get('state') ||
-    !cfg.clientId ||
-    !cfg.clientSecret
-  ) {
+  if (!proofFormat.test(state) || !proofFormat.test(verifier))
     return redirect('/login?error=github')
-  }
+  const flow = store()
+    .prepare(`DELETE FROM github_flows WHERE state_hash=? AND verifier_hash=? AND expires>?
+      RETURNING session_hash`)
+    .get(hash(state), hash(verifier), now()) as { session_hash: string | null } | undefined
+  if (!flow) return redirect('/login?error=github')
+
+  const linking = flow.session_hash !== null
+  const failed = () => redirect(linking ? '/account?github=error' : '/login?error=github')
+  if (!code || !cfg.clientId || !cfg.clientSecret) return failed()
   try {
+    const current = linking ? await session(request) : undefined
+    if (linking && (!current || current.tokenHash !== flow.session_hash)) return failed()
     const accessResponse = await fetch('https://github.com/login/oauth/access_token', {
       method: 'POST',
       headers: { Accept: 'application/json' },
+      redirect: 'error',
       signal: AbortSignal.timeout(8000),
       body: new URLSearchParams({
         client_id: cfg.clientId,
@@ -251,26 +270,41 @@ export async function finishGithub(request: Request) {
           Authorization: `Bearer ${access.access_token}`,
           Accept: 'application/vnd.github+json',
         },
+        redirect: 'error',
         signal: AbortSignal.timeout(8000),
       })
       if (!response.ok) throw new Error()
       return response.json()
     }
-    const [profile, emails] = (await Promise.all([
-      get('/user'),
-      get('/user/emails?per_page=100'),
-    ])) as [{ id?: number }, { email: string; verified: boolean; primary: boolean }[]]
-    if (!Number.isSafeInteger(profile.id) || !Array.isArray(emails)) throw new Error()
-    const verified = emails.filter((item) => item.verified)
-    const selected = verified.find((item) => item.primary)
-    if (!selected) return redirect('/login?error=email')
-    const user = verifiedUser(normalizeEmail(selected.email), String(profile.id))
-    return redirect('/account', newSession(request, user))
+    const profile = (await get('/user')) as { id: number }
+    if (!Number.isSafeInteger(profile.id) || profile.id <= 0) throw new Error()
+    const githubId = String(profile.id)
+    if (current) {
+      linkGithub(current.tokenHash, String(current.user.id), githubId)
+      return redirect('/account?github=linked')
+    }
+    // An explicit employee binding already proved ownership of both accounts.
+    // Legacy OAuth-only accounts still require their original verified primary email.
+    let user = store()
+      .prepare(`SELECT users.* FROM employee_github_links
+        JOIN users USING (github_id) WHERE github_id=?`)
+      .get(githubId) as User | undefined
+    if (!user) {
+      const emails = (await get('/user/emails?per_page=100')) as {
+        email: string
+        verified: boolean
+        primary: boolean
+      }[]
+      const selected = emails.find((item) => item.primary === true && item.verified === true)
+      if (!selected) return redirect('/login?error=email')
+      user = registerGithubUser(normalizeEmail(selected.email), githubId)
+    }
+    return redirect('/account', await newSession(request, user, 'github'))
   } catch (error) {
-    return redirect(
-      error instanceof HttpError && error.status === 409
-        ? '/login?error=account'
-        : '/login?error=github',
-    )
+    if (error instanceof HttpError && error.status === 409)
+      return redirect(linking ? '/account?github=conflict' : '/login?error=account')
+    if (!linking && error instanceof HttpError && error.status === 403)
+      return redirect('/login?error=suspended')
+    return failed()
   }
 }
