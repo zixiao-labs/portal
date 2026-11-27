@@ -41,7 +41,7 @@ export function Footer() {
       <span>© Zixiao Laboratories · 紫霄实验室</span>
       <details className="appearance">
         <summary>
-          <Palette aria-hidden width={17} height={17} /> 外观
+          <Palette aria-hidden width={16} height={16} /> 外观
         </summary>
         <div className="appearance-fields">
           <label>
@@ -96,7 +96,7 @@ export function Header() {
           <img src={logo} alt="" width="36" height="36" />
           <span>
             <strong>紫霄实验室</strong>
-            <small lang="en">ZIXIAO LABORATORIES</small>
+            <small lang="en">Zixiao Laboratories</small>
           </span>
         </a>
         <nav aria-label="主导航">

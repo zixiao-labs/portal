@@ -85,12 +85,7 @@ export function AdminPage({ view }: { view: AdminView }) {
   return (
     <main id="main" className="workspace">
       <header className="workspace-head">
-        <div>
-          <p className="eyebrow">
-            <span className="index-mark" /> 管理 / ADMINISTRATION
-          </p>
-          <h1>管理后台</h1>
-        </div>
+        <h1>管理后台</h1>
         <Link to="/account" className="quiet-link">
           返回个人中心
         </Link>
