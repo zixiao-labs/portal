@@ -17,6 +17,7 @@
     "lint": "oxlint src scripts tests",
     "format": "oxfmt src scripts tests nasti.config.ts lightning.config.ts",
     "test": "lightning run --project unit",
+    "test:action": "python3 -B -m unittest discover -s tests/action -p '*_test.py'",
     "test:visual": "sh scripts/test-visual.sh"
   },
   "keywords": [],
