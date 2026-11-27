@@ -2,18 +2,18 @@ import { ArrowRight, LogoGithub, Person } from '@gravity-ui/icons'
 import { Link } from '@tanstack/react-router'
 import { Button } from '@zixiao-labs/ui-kits-react'
 import { useEffect, useState } from 'react'
+import type { AccountInfo } from '../account-info'
+import { AdminVerification } from './admin-verification'
 import { requestJson, RequestError, userMessage } from './request'
 
-type Account = { email: string; employee: boolean; github: boolean; admin?: boolean }
-
 export function AccountPage({ githubResult }: { githubResult?: 'linked' | 'conflict' | 'error' }) {
-  const [account, setAccount] = useState<Account>()
+  const [account, setAccount] = useState<AccountInfo>()
   const [error, setError] = useState('')
   const [showResult, setShowResult] = useState(true)
   const [busy, setBusy] = useState(false)
   useEffect(() => {
     const controller = new AbortController()
-    void requestJson<Account>('/api/account', 'GET', undefined, controller.signal)
+    void requestJson<AccountInfo>('/api/account', 'GET', undefined, controller.signal)
       .then(setAccount)
       .catch((err: unknown) => {
         if (controller.signal.aborted) return
@@ -91,7 +91,7 @@ export function AccountPage({ githubResult }: { githubResult?: 'linked' | 'confl
             </div>
             <div>
               <dt>账户类型</dt>
-              <dd>{account.employee ? '员工' : '访客'}</dd>
+              <dd>{account.adminAccess ? '管理员' : account.employee ? '员工' : '访客'}</dd>
             </div>
             <div>
               <dt>GitHub</dt>
@@ -118,8 +118,9 @@ export function AccountPage({ githubResult }: { githubResult?: 'linked' | 'confl
               </Button>
             </div>
           )}
+          {account.adminAccess === 'email-required' && <AdminVerification />}
           <div className="account-links">
-            {account.admin && (
+            {account.adminAccess === 'granted' && (
               <Link to="/admin" className="quiet-link">
                 管理后台 <ArrowRight aria-hidden width={16} height={16} />
               </Link>

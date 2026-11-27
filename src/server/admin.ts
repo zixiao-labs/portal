@@ -1,3 +1,4 @@
+import type { AccountInfo } from '../account-info'
 import { adminEmails, organizationRepository, validNumericId } from '../deployment.mjs'
 import { HttpError, json, readJson } from './http'
 import { activeSession, session } from './session'
@@ -9,20 +10,23 @@ function isConfiguredAdmin(user: User) {
   return Boolean(user.employee) && adminEmails(process.env.PORTAL_ADMIN_EMAILS).has(user.email)
 }
 
-export function canAdminister(current: Session) {
-  return current.byEmail && isConfiguredAdmin(current.user)
+export function adminAccess(current: Session): AccountInfo['adminAccess'] {
+  if (isConfiguredAdmin(current.user)) return current.byEmail ? 'granted' : 'email-required'
 }
 
 export async function adminApi(request: Request, path: string) {
   const current = await session(request)
   if (!current) throw new HttpError(401, '请先登录。')
-  if (!canAdminister(current)) throw new HttpError(403, '请使用管理员工作邮箱登录。')
+  const access = adminAccess(current)
+  if (access === 'email-required') throw new HttpError(403, '请先使用工作邮箱验证码验证身份。')
+  if (access !== 'granted') throw new HttpError(403, '当前账户没有管理权限。')
 
   const db = store()
   const write = (operation: () => void) => {
     transaction(db, () => {
       const actor = activeSession(current.tokenHash, String(current.user.id))
-      if (!actor || !isConfiguredAdmin(actor)) throw new HttpError(403, '管理会话已失效。')
+      if (!actor || adminAccess({ ...current, user: actor }) !== 'granted')
+        throw new HttpError(403, '管理会话已失效。')
       operation()
     })
     return json({ ok: true })

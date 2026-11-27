@@ -119,7 +119,7 @@ export function LoginPage({ oauthError }: { oauthError?: string }) {
             员工邮箱
             <span />
           </div>
-          <form onSubmit={submit} className="form-stack">
+          <form id="work-email" onSubmit={submit} className="form-stack">
             {sent ? (
               <>
                 <p className="code-sent" role="status">
