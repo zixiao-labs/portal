@@ -1,4 +1,4 @@
-import { ArrowRight, LogoGithub, Person } from '@gravity-ui/icons'
+import { ArrowRight, LogoGithub } from '@gravity-ui/icons'
 import { Link } from '@tanstack/react-router'
 import { Button } from '@zixiao-labs/ui-kits-react'
 import { useEffect, useState } from 'react'
@@ -49,12 +49,7 @@ export function AccountPage({ githubResult }: { githubResult?: 'linked' | 'confl
   return (
     <main className="workspace" id="main">
       <header className="workspace-head">
-        <div>
-          <p className="eyebrow">
-            <span className="index-mark" /> 账户 / ACCOUNT
-          </p>
-          <h1>个人中心</h1>
-        </div>
+        <h1>个人中心</h1>
         {account && (
           <Button
             variant="outline"
@@ -81,9 +76,7 @@ export function AccountPage({ githubResult }: { githubResult?: 'linked' | 'confl
       {!account && !error && <p role="status">正在读取账户…</p>}
       {account && (
         <section className="sheet account-sheet">
-          <h2>
-            <Person aria-hidden /> 账户信息
-          </h2>
+          <h2>账户信息</h2>
           <dl className="account-details">
             <div>
               <dt>已验证邮箱</dt>

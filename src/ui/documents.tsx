@@ -1,4 +1,4 @@
-import { ArrowRight, BookOpen, FileText, LogoGithub } from '@gravity-ui/icons'
+import { ArrowRight } from '@gravity-ui/icons'
 import { Link } from '@tanstack/react-router'
 import { useState } from 'react'
 import { TextField } from '@zixiao-labs/ui-kits-react'
@@ -14,12 +14,11 @@ function DocumentList({ articles }: { articles: DocumentEntry[] }) {
             to="/docs/$collection/$"
             params={{ collection: entry.collection, _splat: entry.slug }}
           >
-            <FileText aria-hidden />
             <span>
               <b>{entry.title}</b>
               {entry.summary && <small>{entry.summary}</small>}
             </span>
-            <em>{entry.format.toUpperCase()}</em>
+            <span className="document-format">{entry.format.toUpperCase()}</span>
             <ArrowRight aria-hidden />
           </Link>
         </li>
@@ -52,12 +51,7 @@ export function DocumentIndex({
   return (
     <main id="main" className="workspace">
       <header className="workspace-head">
-        <div>
-          <p className="eyebrow">
-            <span className="index-mark" /> 文档 / LIBRARY
-          </p>
-          <h1>文档库</h1>
-        </div>
+        <h1>文档库</h1>
         {articles.length > 0 && (
           <TextField
             className="doc-search"
@@ -70,10 +64,9 @@ export function DocumentIndex({
         )}
       </header>
       {!articles.length ? (
-        <section className="sheet empty-docs">
-          <BookOpen width={32} height={32} aria-hidden />
-          <h2>还没有已发布的文档</h2>
-          <p>获授权的仓库通过 GitHub Actions 发布文档后，会出现在这里。</p>
+        <section className="empty-docs">
+          <h2>暂无公开文档</h2>
+          <p className="muted">授权仓库可通过 GitHub Actions 发布文档。</p>
         </section>
       ) : !groups.length ? (
         <p role="status">没有与「{filter}」匹配的文档。</p>
@@ -81,7 +74,6 @@ export function DocumentIndex({
         groups.map((group) => (
           <section className="collection sheet" key={group.name}>
             <h2>
-              <LogoGithub aria-hidden />
               <Link to="/docs/$collection" params={{ collection: group.name }}>
                 {group.name}
               </Link>
@@ -105,7 +97,7 @@ export function DocumentCollection({
     <main className="workspace" id="main">
       <header className="workspace-head">
         <div>
-          <nav className="eyebrow breadcrumb" aria-label="面包屑">
+          <nav className="breadcrumb" aria-label="面包屑">
             <Link to="/docs">文档库</Link>
           </nav>
           <h1 className="collection-name">{collection.name}</h1>
@@ -124,7 +116,7 @@ export function DocumentCollection({
 export function DocumentArticle({ page }: { page: DocumentPage }) {
   return (
     <main className="workspace article-page" id="main">
-      <nav className="eyebrow breadcrumb" aria-label="面包屑">
+      <nav className="breadcrumb" aria-label="面包屑">
         <Link to="/docs">文档库</Link>
         <span aria-hidden> / </span>
         <Link to="/docs/$collection" params={{ collection: page.collection }}>

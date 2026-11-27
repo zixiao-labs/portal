@@ -103,6 +103,36 @@ async function expectMode(page: Page, mode: 'dark' | 'light') {
   )
 }
 
+// Simulate only GitHub's side of the browser redirect. The portal still has to
+// issue the authorization URL and handle the callback with its own browser cookie.
+async function mockGithubAuthorization(page: Page) {
+  const authorize = (url: string) => {
+    const authorization = new URL(url)
+    expect(authorization.origin + authorization.pathname).toBe(
+      'https://github.com/login/oauth/authorize',
+    )
+    const callback = new URL(authorization.searchParams.get('redirect_uri')!)
+    callback.searchParams.set('code', 'test-code')
+    callback.searchParams.set('state', authorization.searchParams.get('state')!)
+    return callback
+  }
+  await page.route('https://github.com/login/oauth/authorize**', async (route) => {
+    const callback = authorize(route.request().url())
+    await route.fulfill({ status: 302, headers: { location: callback.href } })
+  })
+  // Unlike linking, login starts with a server redirect. Playwright routes the
+  // first request in a redirect chain, not the subsequent navigation to GitHub.
+  await page.route(`${origin}/api/auth/github`, async (route) => {
+    const response = await route.fetch({ maxRedirects: 0 })
+    expect(response.status()).toBe(303)
+    const headers = response.headers()
+    await route.fulfill({
+      response,
+      headers: { ...headers, location: authorize(headers.location).href },
+    })
+  })
+}
+
 // Snapshot a downsampled PNG, not the DOM: broad layout and palette changes are
 // caught, while tiny platform-dependent CJK glyph and AA differences are ignored.
 // Dark snapshots also distinguish the canvas (:) from raised panels (+).
@@ -162,12 +192,18 @@ test('desktop and mobile login keep the GitHub action visible and themed', async
     ['login-desktop', { width: 1440, height: 900 }],
     ['login-mobile', { width: 390, height: 844 }],
   ] as const) {
-    const page = await browser!.newPage({ viewport, reducedMotion: 'reduce' })
+    const page = await browser!.newPage({ viewport, colorScheme: 'light', reducedMotion: 'reduce' })
     try {
       await page.goto(`${origin}/login`)
-      const action = await page.getByRole('link', { name: '使用 GitHub 继续' }).boundingBox()
-      expect(action?.height).toBeGreaterThanOrEqual(44)
-      expect(action!.y + action!.height).toBeLessThan(viewport.height)
+      for (const action of [
+        page.getByRole('link', { name: '使用 GitHub 登录' }),
+        page.getByRole('button', { name: '发送验证码' }),
+        page.getByRole('link', { name: '浏览公开文档' }),
+      ]) {
+        const bounds = (await action.boundingBox())!
+        expect(bounds.height).toBeGreaterThanOrEqual(44)
+        expect(bounds.y + bounds.height).toBeLessThan(viewport.height)
+      }
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(viewport.width)
       expect(await page.locator('html').getAttribute('lang')).toBe('zh-CN')
       await screenshot(page, name)
@@ -196,7 +232,7 @@ test('system dark login keeps the form usable on desktop and mobile', async () =
     try {
       await page.goto(`${origin}/login`)
       await expectMode(page, 'dark')
-      const action = await page.getByRole('link', { name: '使用 GitHub 继续' }).boundingBox()
+      const action = await page.getByRole('link', { name: '使用 GitHub 登录' }).boundingBox()
       expect(action!.y + action!.height).toBeLessThan(viewport.height)
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(viewport.width)
       await page.getByLabel('工作邮箱').fill('visitor@example.org')
@@ -206,6 +242,33 @@ test('system dark login keeps the form usable on desktop and mobile', async () =
     } finally {
       await page.close()
     }
+  }
+})
+
+test('a GitHub error leaves the work email form and public docs usable on a narrow screen', async () => {
+  const page = await browser!.newPage({ viewport: { width: 320, height: 640 } })
+  try {
+    await page.goto(`${origin}/login?error=github`)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(320)
+    const github = page.getByRole('link', { name: '使用 GitHub 登录' })
+    const form = page.getByRole('form', { name: '员工邮箱登录' })
+    expect(await github.getAttribute('href')).toBe('/api/auth/github')
+    expect(await page.getByRole('alert').textContent()).toContain('GitHub 登录未完成')
+    expect(await form.getByRole('alert').count()).toBe(0)
+
+    await github.focus()
+    await page.keyboard.press('Tab')
+    const email = form.getByLabel('工作邮箱')
+    expect(await email.evaluate((input) => input === document.activeElement)).toBe(true)
+    await email.fill('visitor@example.org')
+    await email.press('Enter')
+    await form.getByRole('alert').waitFor()
+    expect(await form.getByRole('alert').textContent()).toContain('仅限 @zixiaolabs.com')
+
+    await page.getByRole('link', { name: '浏览公开文档' }).press('Enter')
+    await page.waitForURL(`${origin}/docs`)
+  } finally {
+    await page.close()
   }
 })
 
@@ -378,14 +441,7 @@ test('the client-only account gates its data, links GitHub and invalidates the J
       .addCookies([
         { name: 'portal_session', value: session.split('=')[1], url: origin, httpOnly: true },
       ])
-    // Simulate GitHub's browser redirect; the portal still validates and consumes its own state.
-    await page.route('https://github.com/login/oauth/authorize**', async (route) => {
-      const authorization = new URL(route.request().url())
-      const callback = new URL(authorization.searchParams.get('redirect_uri')!)
-      callback.searchParams.set('code', 'test-code')
-      callback.searchParams.set('state', authorization.searchParams.get('state')!)
-      await route.fulfill({ status: 302, headers: { location: callback.href } })
-    })
+    await mockGithubAuthorization(page)
     await page.goto(`${origin}/account`)
     await page.getByText('employee@zixiaolabs.com').waitFor()
     await screenshot(page, 'account-desktop')
@@ -409,6 +465,10 @@ test('the client-only account gates its data, links GitHub and invalidates the J
     expect((await fetch(`${origin}/api/account`, { headers: { cookie: session } })).status).toBe(
       401,
     )
+    await page.getByRole('link', { name: '使用 GitHub 登录' }).click()
+    await page.waitForURL(`${origin}/account`)
+    await page.getByText('employee@zixiaolabs.com', { exact: true }).waitFor()
+    await page.getByText('员工', { exact: true }).waitFor()
   } finally {
     vi.unstubAllGlobals()
     await page.close()
@@ -554,6 +614,45 @@ test('the admin console manages users and multiple repository authorizations', a
     await added.waitFor({ state: 'detached' })
     await page.getByText('zixiao-labs/handbook', { exact: true }).waitFor()
   } finally {
+    await page.close()
+  }
+})
+
+test('a new visitor can retry GitHub login after verifying their primary email', async () => {
+  const page = await browser!.newPage({ viewport: { width: 390, height: 844 } })
+  const email = 'new-reader@example.org'
+  let verified = false
+  const fetchHttp = globalThis.fetch
+  vi.stubGlobal('fetch', (input: string, options?: RequestInit) => {
+    if (input === 'https://github.com/login/oauth/access_token')
+      return Promise.resolve(Response.json({ access_token: 'fake-access-token' }))
+    if (input === 'https://api.github.com/user')
+      return Promise.resolve(Response.json({ id: 67890 }))
+    if (input === 'https://api.github.com/user/emails?per_page=100')
+      return Promise.resolve(Response.json([{ email, primary: true, verified }]))
+    return fetchHttp(input, options)
+  })
+  try {
+    await mockGithubAuthorization(page)
+    await page.goto(`${origin}/login`)
+    const github = page.getByRole('link', { name: '使用 GitHub 登录' })
+    await github.click()
+    await page.waitForURL(`${origin}/login?error=email`)
+    await page.getByRole('alert').filter({ hasText: '请先在 GitHub 验证主邮箱' }).waitFor()
+    expect((await page.request.get(`${origin}/api/account`)).status()).toBe(401)
+
+    verified = true
+    await github.click()
+    await page.waitForURL(`${origin}/account`)
+    await page.getByText(email, { exact: true }).waitFor()
+    await page.getByText('访客', { exact: true }).waitFor()
+    await page.reload()
+    await page.getByText(email, { exact: true }).waitFor()
+    await page.getByRole('button', { name: '退出登录' }).click()
+    await page.waitForURL(`${origin}/login`)
+    expect((await page.request.get(`${origin}/api/account`)).status()).toBe(401)
+  } finally {
+    vi.unstubAllGlobals()
     await page.close()
   }
 })

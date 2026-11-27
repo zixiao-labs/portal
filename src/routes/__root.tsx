@@ -19,7 +19,6 @@ export const Route = createRootRoute({
   component: Outlet,
   notFoundComponent: () => (
     <main id="main" className="workspace">
-      <p className="eyebrow">404 / NOT FOUND</p>
       <h1>页面未找到</h1>
       <Link to="/docs">返回文档库</Link>
     </main>
