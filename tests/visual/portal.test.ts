@@ -267,6 +267,37 @@ test('the site root redirects permanently to the canonical login page', async ()
   expect(await login.text()).toContain('href="https://zixiaolabs.com/login"')
 })
 
+test('the header logo opens login for guests and the account for signed-in users', async () => {
+  const page = await browser!.newPage()
+  const logo = page.getByRole('banner').getByRole('link', { name: /紫霄实验室/ })
+  try {
+    await page.goto(`${origin}/docs`)
+    await logo.click()
+    await page.waitForURL(`${origin}/login`)
+    await page.getByRole('heading', { name: '登录门户' }).waitFor()
+
+    const readerSession = await newSession(
+      new Request(origin),
+      { id: 3, email: 'reader@example.org', employee: 0, github_id: '12345' },
+      'github',
+    )
+    await page.context().addCookies([
+      {
+        name: 'portal_session',
+        value: readerSession.split(';')[0].split('=')[1],
+        url: origin,
+        httpOnly: true,
+      },
+    ])
+    await page.goto(`${origin}/docs`)
+    await logo.click()
+    await page.waitForURL(`${origin}/account`)
+    await page.getByText('reader@example.org', { exact: true }).waitFor()
+  } finally {
+    await page.close()
+  }
+})
+
 test('public documents render with SEO, route to an article, and can be searched', async () => {
   const page = await browser!.newPage({ viewport: { width: 1440, height: 900 } })
   try {
