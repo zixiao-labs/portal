@@ -63,9 +63,16 @@ class PublishActionTest(unittest.TestCase):
         with patch.dict(os.environ, env, clear=True), patch.object(publisher, "build_opener") as factory:
             factory.return_value.open.side_effect = [
                 io.BytesIO(b'{"value":"fake-oidc-assertion"}'),
-                io.BytesIO(b'{"collection":"handbook","count":1}'),
+                io.BytesIO(b'{"collection":"handbook","count":1,'
+                           b'"url":"https://zixiaolabs.com/docs/handbook",'
+                           b'"llmsTxt":"https://zixiaolabs.com/docs/handbook/llms.txt"}'),
             ]
-            publisher.publish(endpoint, payload)
+            with patch("sys.stdout", new_callable=io.StringIO) as output:
+                publisher.publish(endpoint, payload)
+                self.assertEqual(output.getvalue().splitlines(), [
+                    "Published 1 documents to https://zixiaolabs.com/docs/handbook",
+                    "Documentation index: https://zixiaolabs.com/docs/handbook/llms.txt",
+                ])
             self.assertIs(factory.call_args.args[0], publisher.NoRedirect)
             get, post = [call.args[0] for call in factory.return_value.open.call_args_list]
             self.assertEqual(parse_qs(urlsplit(get.full_url).query)["audience"], [endpoint])

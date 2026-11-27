@@ -2,8 +2,8 @@
 
 - `/login`：公开的登录入口。任何用户都可通过 **GitHub** 登录／自动注册；GitHub 注册要求主邮箱已验证。仅验证了 `@zixiaolabs.com` 工作邮箱才能注册员工账户。门户将会话 JWT 保存在 `HttpOnly` Cookie 中，7 天有效；退出登录后该会话立即失效。
 - `/account`：个人中心与 API 不索引。员工用工作邮箱登录后，可绑定自己的 GitHub 账号；之后可用同一个 GitHub 账号登录，门户中的工作邮箱和员工身份不会改变。不会按邮箱自动合并账户，也不会覆盖已有绑定。
-- `/admin`：管理后台。管理员可搜索、停用、恢复用户，结束其会话，以及授权或撤销多个组织仓库的文档发布权限。名单内的员工通过 GitHub 登录后仍会显示为管理员，但必须验证工作邮箱才能进入后台；可从个人中心直接发起验证，无需退出登录。
-- `/docs`：公开 SSR 文档库，带标题、描述、canonical、sitemap 与全文页面。仅接受获准仓库的 GitHub Actions 短期 OIDC 凭据，不接受网页会话、PAT 或长期发布 Token。
+- `/admin`：管理后台。管理员可搜索、停用、恢复用户，结束其会话，以及授权或撤销多个组织仓库的文档发布权限。必须验证工作邮箱才能进入后台和签发有效期 30 分钟的 [CLI 用户管理凭据](docs/cli-user-management.md)；通过 GitHub 登录的管理员可从个人中心直接发起验证，无需退出登录。
+- `/docs`：公开 SSR 文档库。首次发布后，仓库拥有 `/docs/<repo>` 首页和 `/docs/<repo>/llms.txt` 索引，可作为 Context7 的公开文档来源。提交仅接受获授权仓库的 GitHub Actions 短期 OIDC 凭据，不接受浏览器会话、CLI Token 或 PAT。[Portal 文档源码](docs/overview.md)也通过同一工作流发布。
 - 页脚「外观」支持 UI Kit 的全部内置配色和组件风格，默认是 **紫霄配色 + 鹤坡 + 跟随系统**。可手动选择浅色或深色，浏览器会记住偏好。
 
 ## 本地工具链
@@ -120,6 +120,7 @@ JWT 沿用 `PORTAL_SECRET` 派生签名密钥，GitHub 绑定沿用现有 OAuth 
 
 #### 文档格式、忽略与更新
 
+- 从终端可以用 `gh workflow run publish-docs.yml --repo zixiao-labs/<repo> --ref main` 触发发布。HTTP 请求格式、发布结果和 Context7 提交流程见[发布文档指南](docs/publish-docs.md)。
 - 只收集 Git 跟踪的 `docs/` 下常规 `.md`、`.mdx`、`.html` 文件。路径各段使用小写英数字、`_`、`-`，首字符必须是英数字；`docs/guides/start.md` 发布为 `/docs/<repo>/guides/start`。同一路径不能同时存在不同扩展名。页面标题取第一条一级标题，摘要取首段。
 - 根目录 `.docsignore` 使用 gitignore 语法，例如 `/docs/drafts/`；标准 `.gitignore` 也会生效，两套规则独立计算，任一排除的文件都不会上传。不要用忽略规则替代内容审查：所有上传文档都可公开访问，即使来源是私有仓库。
 - MD 支持 GFM；HTML 会净化；MDX 支持 Markdown 和无属性的静态标签（如 `details`、`summary`、`kbd`、`mark`），拒绝自定义组件、表达式和 `import`/`export`。不会执行上传代码，也不代理资源；脚本、嵌入和图片不显示。文间链接用实际文档 URL，例如 `/docs/my-repo/guides/start`，不要链接源 `.md` 文件。

@@ -2,16 +2,38 @@ import { ArrowRight, BookOpen, FileText, LogoGithub } from '@gravity-ui/icons'
 import { Link } from '@tanstack/react-router'
 import { useState } from 'react'
 import { TextField } from '@zixiao-labs/ui-kits-react'
-import type { Collection, DocumentPage } from '../server/store'
+import { llmsPath } from '../doc-path'
+import type { Collection, DocumentEntry, DocumentPage } from '../server/store'
 
-type Entry = Omit<DocumentPage, 'repository' | 'published' | 'html'>
+function DocumentList({ articles }: { articles: DocumentEntry[] }) {
+  return (
+    <ul className="document-list">
+      {articles.map((entry) => (
+        <li key={entry.slug}>
+          <Link
+            to="/docs/$collection/$"
+            params={{ collection: entry.collection, _splat: entry.slug }}
+          >
+            <FileText aria-hidden />
+            <span>
+              <b>{entry.title}</b>
+              {entry.summary && <small>{entry.summary}</small>}
+            </span>
+            <em>{entry.format.toUpperCase()}</em>
+            <ArrowRight aria-hidden />
+          </Link>
+        </li>
+      ))}
+    </ul>
+  )
+}
 
 export function DocumentIndex({
   collections,
   articles,
 }: {
   collections: Collection[]
-  articles: Entry[]
+  articles: DocumentEntry[]
 }) {
   const [filter, setFilter] = useState('')
   const query = filter.trim().toLowerCase()
@@ -51,10 +73,7 @@ export function DocumentIndex({
         <section className="sheet empty-docs">
           <BookOpen width={32} height={32} aria-hidden />
           <h2>还没有已发布的文档</h2>
-          <p>文档发布后会出现在这里。如果你是员工，可以在个人中心创建发布 Token。</p>
-          <Link className="quiet-link" to="/account">
-            前往个人中心 <ArrowRight aria-hidden width={16} height={16} />
-          </Link>
+          <p>获授权的仓库通过 GitHub Actions 发布文档后，会出现在这里。</p>
         </section>
       ) : !groups.length ? (
         <p role="status">没有与「{filter}」匹配的文档。</p>
@@ -62,29 +81,42 @@ export function DocumentIndex({
         groups.map((group) => (
           <section className="collection sheet" key={group.name}>
             <h2>
-              <LogoGithub aria-hidden /> {group.name}
+              <LogoGithub aria-hidden />
+              <Link to="/docs/$collection" params={{ collection: group.name }}>
+                {group.name}
+              </Link>
             </h2>
-            <ul className="document-list">
-              {group.entries.map((entry) => (
-                <li key={entry.slug}>
-                  <Link
-                    to="/docs/$collection/$"
-                    params={{ collection: entry.collection, _splat: entry.slug }}
-                  >
-                    <FileText aria-hidden />
-                    <span>
-                      <b>{entry.title}</b>
-                      {entry.summary && <small>{entry.summary}</small>}
-                    </span>
-                    <em>{entry.format.toUpperCase()}</em>
-                    <ArrowRight aria-hidden />
-                  </Link>
-                </li>
-              ))}
-            </ul>
+            <DocumentList articles={group.entries} />
           </section>
         ))
       )}
+    </main>
+  )
+}
+
+export function DocumentCollection({
+  collection,
+  articles,
+}: {
+  collection: Collection
+  articles: DocumentEntry[]
+}) {
+  return (
+    <main className="workspace" id="main">
+      <header className="workspace-head">
+        <div>
+          <nav className="eyebrow breadcrumb" aria-label="面包屑">
+            <Link to="/docs">文档库</Link>
+          </nav>
+          <h1 className="collection-name">{collection.name}</h1>
+        </div>
+        <a className="quiet-link" href={llmsPath(collection.name)}>
+          llms.txt
+        </a>
+      </header>
+      <section className="collection sheet" aria-label="仓库文档">
+        <DocumentList articles={articles} />
+      </section>
     </main>
   )
 }
@@ -94,7 +126,10 @@ export function DocumentArticle({ page }: { page: DocumentPage }) {
     <main className="workspace article-page" id="main">
       <nav className="eyebrow breadcrumb" aria-label="面包屑">
         <Link to="/docs">文档库</Link>
-        <span>/ {page.collection}</span>
+        <span aria-hidden> / </span>
+        <Link to="/docs/$collection" params={{ collection: page.collection }}>
+          {page.collection}
+        </Link>
       </nav>
       <article>
         <h1>{page.title}</h1>

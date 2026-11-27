@@ -33,6 +33,10 @@ export function openStore(path: string) {
       expires INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id);
+    CREATE TABLE IF NOT EXISTS cli_credentials (
+      session_hash TEXT PRIMARY KEY REFERENCES sessions(hash) ON DELETE CASCADE,
+      hash TEXT NOT NULL UNIQUE, expires INTEGER NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS suspended_users (
       user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE
     );
@@ -82,16 +86,28 @@ export function transaction<T>(db: DatabaseSync, operation: () => T): T {
   }
 }
 
+export type DocumentEntry = Omit<DocumentPage, 'repository' | 'published' | 'html'>
+
+const collectionColumns = 'SELECT name, repository, revision, published FROM collections'
+const articleColumns = 'SELECT collection, slug, title, summary, format FROM articles'
+
 export function listDocuments(db = store()) {
-  const collections = db
-    .prepare('SELECT name, repository, revision, published FROM collections ORDER BY name')
-    .all() as Collection[]
+  const collections = db.prepare(`${collectionColumns} ORDER BY name`).all() as Collection[]
   const articles = db
-    .prepare(
-      'SELECT collection, slug, title, summary, format FROM articles ORDER BY collection, slug',
-    )
-    .all() as Omit<DocumentPage, 'repository' | 'published' | 'html'>[]
+    .prepare(`${articleColumns} ORDER BY collection, slug`)
+    .all() as DocumentEntry[]
   return { collections, articles }
+}
+
+export function findCollection(name: string, db = store()) {
+  const collection = db.prepare(`${collectionColumns} WHERE name=?`).get(name) as
+    | Collection
+    | undefined
+  if (!collection) return
+  const articles = db
+    .prepare(`${articleColumns} WHERE collection=? ORDER BY slug`)
+    .all(name) as DocumentEntry[]
+  return { collection, articles }
 }
 
 export function findDocument(collection: string, slug: string, db = store()) {

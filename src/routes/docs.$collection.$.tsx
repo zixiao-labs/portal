@@ -1,6 +1,7 @@
 import { createFileRoute, notFound } from '@tanstack/react-router'
 import { canonicalOrigin } from '../deployment.mjs'
 import { documentPage } from '../doc-data'
+import { articlePath } from '../doc-path'
 import { DocumentArticle } from '../ui/documents'
 
 export const Route = createFileRoute('/docs/$collection/$')({
@@ -22,7 +23,7 @@ export const Route = createFileRoute('/docs/$collection/$')({
           links: [
             {
               rel: 'canonical',
-              href: `${canonicalOrigin}/docs/${loaderData.collection}/${loaderData.slug}`,
+              href: canonicalOrigin + articlePath(loaderData.collection, loaderData.slug),
             },
           ],
         }

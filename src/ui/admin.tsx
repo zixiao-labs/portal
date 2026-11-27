@@ -5,7 +5,7 @@ import type { AccountInfo } from '../account-info'
 import { AdminVerification } from './admin-verification'
 import { requestJson, RequestError, userMessage } from './request'
 
-type View = 'users' | 'repositories'
+export type AdminView = 'users' | 'repositories' | 'cli'
 type User = {
   id: string
   email: string
@@ -62,7 +62,7 @@ function Feedback({ error, notice }: { error: string; notice?: string }) {
   )
 }
 
-export function AdminPage({ view }: { view: View }) {
+export function AdminPage({ view }: { view: AdminView }) {
   const [access, setAccess] = useState<
     NonNullable<AccountInfo['adminAccess']> | 'loading' | 'denied'
   >('loading')
@@ -117,11 +117,70 @@ export function AdminPage({ view }: { view: View }) {
             >
               可发布仓库
             </Link>
+            <Link
+              to="/admin"
+              search={{ view: 'cli' }}
+              data-selected={view === 'cli'}
+              activeOptions={{ exact: true }}
+            >
+              CLI 凭据
+            </Link>
           </nav>
-          {view === 'repositories' ? <Repositories /> : <Users />}
+          {view === 'users' && <Users />}
+          {view === 'repositories' && <Repositories />}
+          {view === 'cli' && <CliCredentials />}
         </>
       )}
     </main>
+  )
+}
+
+function CliCredentials() {
+  const [credential, setCredential] = useState<{ token: string; expiresAt: string }>()
+  const { act, busy, error, notice } = useAdminAction()
+  return (
+    <section className="sheet admin-panel" aria-labelledby="admin-cli-title">
+      <h2 id="admin-cli-title">CLI 凭据</h2>
+      <p className="muted">
+        仅用于 CLI 用户管理，有效期 30 分钟。重新签发或退出登录会让旧凭据失效。
+      </p>
+      <div className="admin-actions">
+        <Button
+          variant="solid"
+          disabled={busy}
+          onClick={() =>
+            void act(async () => {
+              setCredential(await requestJson('/api/admin/cli-token', 'POST'))
+            })
+          }
+        >
+          签发 CLI Token
+        </Button>
+        <Button
+          variant="outline"
+          disabled={busy}
+          onClick={() =>
+            void act(async () => {
+              await requestJson('/api/admin/cli-token', 'DELETE')
+              setCredential(undefined)
+            }, '当前会话的 CLI Token 已撤销。')
+          }
+        >
+          撤销 CLI Token
+        </Button>
+      </div>
+      <Feedback error={error} notice={notice} />
+      {credential && (
+        <div className="admin-form">
+          <TextField
+            label="CLI Token（仅本次显示）"
+            value={credential.token}
+            inputProps={{ readOnly: true, spellCheck: false, autoComplete: 'off' }}
+          />
+          <p className="muted admin-hint">到期：{credential.expiresAt}</p>
+        </div>
+      )}
+    </section>
   )
 }
 

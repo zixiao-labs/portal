@@ -114,7 +114,10 @@ def publish(endpoint, payload):
         )
         with opener.open(request, timeout=60) as response:
             result = json.load(response)
-            print(f"Published {result['count']} documents to /docs/{result['collection']}/…")
+            url = result.get("url") or f"/docs/{result['collection']}"
+            print(f"Published {result['count']} documents to {url}")
+            if result.get("llmsTxt"):
+                print(f"Documentation index: {result['llmsTxt']}")
     except HTTPError as error:
         if error.url == endpoint:
             try:
