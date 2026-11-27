@@ -1,5 +1,5 @@
 import type { AccountInfo } from '../account-info'
-import { adminAccess, adminApi } from './admin'
+import { adminAccess, adminApi, cliApi } from './admin'
 import { checkCode, finishGithub, sendCode, startGithub } from './auth'
 import { config } from './config'
 import { checkOrigin, HttpError, json, readJson } from './http'
@@ -13,6 +13,7 @@ export async function api(request: Request, path: string) {
     if (path === '/api/auth/github' && method === 'GET') return await startGithub(request)
     if (path === '/api/auth/github/callback' && method === 'GET') return await finishGithub(request)
     if (path === '/api/publish' && method === 'POST') return json(await publish(request))
+    if (path.startsWith('/api/cli/')) return cliApi(request, path)
     if (method === 'POST' || method === 'DELETE') checkOrigin(request, origin)
     if (path.startsWith('/api/admin/')) return await adminApi(request, path)
     if (path === '/api/auth/github/link' && method === 'POST')

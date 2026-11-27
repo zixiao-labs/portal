@@ -1,6 +1,8 @@
+import { createHmac } from 'node:crypto'
 import type { AccountInfo } from '../account-info'
 import { adminEmails, organizationRepository, validNumericId } from '../deployment.mjs'
-import { HttpError, json, readJson } from './http'
+import { config } from './config'
+import { HttpError, json, opaque, readJson } from './http'
 import { activeSession, session } from './session'
 import { store, transaction, type User } from './store'
 
@@ -14,26 +16,27 @@ export function adminAccess(current: Session): AccountInfo['adminAccess'] {
   if (isConfiguredAdmin(current.user)) return current.byEmail ? 'granted' : 'email-required'
 }
 
-export async function adminApi(request: Request, path: string) {
-  const current = await session(request)
-  if (!current) throw new HttpError(401, '请先登录。')
-  const access = adminAccess(current)
-  if (access === 'email-required') throw new HttpError(403, '请先使用工作邮箱验证码验证身份。')
-  if (access !== 'granted') throw new HttpError(403, '当前账户没有管理权限。')
+const cliTokenAge = 30 * 60
+const now = () => Math.floor(Date.now() / 1000)
+const cliHash = (token: string) => createHmac('sha256', config().secret).update(token).digest('hex')
 
+type Write = (operation: () => unknown) => Response
+
+function guardedWrite(actor: () => User | undefined): Write {
+  return (operation) =>
+    json(
+      transaction(store(), () => {
+        const user = actor()
+        if (!user || !isConfiguredAdmin(user)) throw new HttpError(403, '管理会话已失效。')
+        return operation() ?? { ok: true }
+      }),
+    )
+}
+
+function userApi(request: Request, path: string, write: Write) {
   const db = store()
-  const write = (operation: () => void) => {
-    transaction(db, () => {
-      const actor = activeSession(current.tokenHash, String(current.user.id))
-      if (!actor || adminAccess({ ...current, user: actor }) !== 'granted')
-        throw new HttpError(403, '管理会话已失效。')
-      operation()
-    })
-    return json({ ok: true })
-  }
   const { method } = request
-
-  if (path === '/api/admin/users' && method === 'GET') {
+  if (path === '/users' && method === 'GET') {
     const search = new URL(request.url).searchParams
     const query = (search.get('q') ?? '').trim().toLowerCase()
     const after = search.get('after')
@@ -59,7 +62,7 @@ export async function adminApi(request: Request, path: string) {
 
   const target =
     method === 'POST' &&
-    /^\/api\/admin\/users\/([1-9][0-9]{0,19})\/(suspend|restore|revoke-sessions)$/.exec(path)
+    /^\/users\/([1-9][0-9]{0,19})\/(suspend|restore|revoke-sessions)$/.exec(path)
   if (target) {
     const [, id, action] = target
     return write(() => {
@@ -78,6 +81,68 @@ export async function adminApi(request: Request, path: string) {
       }
     })
   }
+  throw new HttpError(404, '未找到接口。')
+}
+
+// These routes never consult a browser cookie or accept a GitHub credential.
+export function cliApi(request: Request, path: string) {
+  const token = request.headers
+    .get('authorization')
+    ?.match(/^Bearer (zxc_[A-Za-z0-9_-]{43})$/i)?.[1]
+  if (!token) throw new HttpError(401, '需要有效的门户 CLI Token。')
+  const hash = cliHash(token)
+  const db = store()
+  const actor = () =>
+    db
+      .prepare(`SELECT users.* FROM cli_credentials
+      JOIN sessions ON sessions.hash=cli_credentials.session_hash
+      JOIN users ON users.id=sessions.user_id
+      WHERE cli_credentials.hash=? AND cli_credentials.expires>? AND sessions.expires>?
+        AND NOT EXISTS (SELECT 1 FROM suspended_users WHERE user_id=users.id)`)
+      .get(hash, now(), now()) as User | undefined
+  const current = actor()
+  if (!current) throw new HttpError(401, 'CLI Token 已失效。')
+  if (!isConfiguredAdmin(current)) throw new HttpError(403, '当前账户没有管理权限。')
+  const write = guardedWrite(actor)
+  if (path === '/api/cli/token' && request.method === 'DELETE') {
+    return write(() => {
+      db.prepare('DELETE FROM cli_credentials WHERE hash=?').run(hash)
+    })
+  }
+  return userApi(request, path.slice('/api/cli'.length), write)
+}
+
+export async function adminApi(request: Request, path: string) {
+  const current = await session(request)
+  if (!current) throw new HttpError(401, '请先登录。')
+  const access = adminAccess(current)
+  if (access === 'email-required') throw new HttpError(403, '请先使用工作邮箱验证码验证身份。')
+  if (access !== 'granted') throw new HttpError(403, '当前账户没有管理权限。')
+
+  const db = store()
+  const write = guardedWrite(() => activeSession(current.tokenHash, String(current.user.id)))
+  const { method } = request
+
+  if (path === '/api/admin/cli-token' && method === 'POST') {
+    return write(() => {
+      const token = `zxc_${opaque()}`
+      const expires = now() + cliTokenAge
+      db.prepare(`INSERT INTO cli_credentials (session_hash, hash, expires) VALUES (?, ?, ?)
+        ON CONFLICT(session_hash) DO UPDATE SET hash=excluded.hash, expires=excluded.expires`).run(
+        current.tokenHash,
+        cliHash(token),
+        expires,
+      )
+      return { token, expiresAt: new Date(expires * 1000).toISOString() }
+    })
+  }
+  if (path === '/api/admin/cli-token' && method === 'DELETE') {
+    return write(() => {
+      db.prepare('DELETE FROM cli_credentials WHERE session_hash=?').run(current.tokenHash)
+    })
+  }
+  if (path === '/api/admin/users' || path.startsWith('/api/admin/users/'))
+    return userApi(request, path.slice('/api/admin'.length), write)
 
   if (path === '/api/admin/repositories' && method === 'GET') {
     return json({

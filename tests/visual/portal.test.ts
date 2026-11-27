@@ -272,7 +272,17 @@ test('public documents render with SEO, route to an article, and can be searched
   try {
     const index = await fetch(`${origin}/docs`)
     expect(index.status).toBe(200)
-    expect(await index.text()).toContain('Handbook')
+    expect(await index.text()).toContain('href="/docs/handbook"')
+    const collection = await fetch(`${origin}/docs/handbook`)
+    expect(collection.status).toBe(200)
+    const collectionHtml = await collection.text()
+    expect(collectionHtml).toContain('href="https://zixiaolabs.com/docs/handbook"')
+    expect(collectionHtml).toContain('href="/docs/handbook/guide/start"')
+    const llms = await fetch(`${origin}/docs/handbook/llms.txt`)
+    expect(llms.headers.get('content-type')).toBe('text/plain; charset=utf-8')
+    expect(await llms.text()).toContain(`[Handbook](${origin}/docs/handbook/guide/start)`)
+    expect((await fetch(`${origin}/docs/missing/llms.txt`)).status).toBe(404)
+    expect((await fetch(`${origin}/docs/missing`)).status).toBe(404)
     const direct = await fetch(`${origin}/docs/handbook/guide/start`)
     expect(direct.status).toBe(200)
     expect(await direct.text()).toContain('This document is publicly available.')
@@ -286,6 +296,16 @@ test('public documents render with SEO, route to an article, and can be searched
     await page.emulateMedia({ colorScheme: 'dark' })
     await expectMode(page, 'dark')
     await screenshot(page, 'docs-desktop-dark')
+    await page.getByRole('link', { name: 'handbook', exact: true }).click()
+    await page.waitForURL('**/docs/handbook')
+    await page.getByRole('heading', { name: 'handbook', exact: true }).waitFor()
+    expect(await page.getByRole('link', { name: 'llms.txt' }).getAttribute('href')).toBe(
+      '/docs/handbook/llms.txt',
+    )
+    await page.setViewportSize({ width: 390, height: 844 })
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390)
+    await screenshot(page, 'collection-mobile-dark')
+    await page.setViewportSize({ width: 1440, height: 900 })
     await page.getByRole('link', { name: /Handbook/ }).click()
     await page.getByRole('heading', { name: 'Handbook', exact: true }).waitFor()
     await expectMode(page, 'dark')
@@ -293,9 +313,9 @@ test('public documents render with SEO, route to an article, and can be searched
     expect(await page.locator('link[rel="canonical"]').getAttribute('href')).toBe(
       'https://zixiaolabs.com/docs/handbook/guide/start',
     )
-    expect(await (await fetch(`${origin}/sitemap.xml`)).text()).toContain(
-      '/docs/handbook/guide/start',
-    )
+    const sitemap = await (await fetch(`${origin}/sitemap.xml`)).text()
+    expect(sitemap).toContain(`${origin}/docs/handbook</loc>`)
+    expect(sitemap).toContain(`${origin}/docs/handbook/guide/start</loc>`)
   } finally {
     await page.close()
   }
@@ -448,6 +468,19 @@ test('the admin console manages users and multiple repository authorizations', a
     page.once('dialog', (dialog) => void dialog.accept())
     await reader.getByRole('button', { name: '恢复', exact: true }).click()
     await reader.getByText(/正常/).waitFor()
+
+    await page.getByRole('link', { name: 'CLI 凭据' }).click()
+    const issue = page.getByRole('button', { name: '签发 CLI Token' })
+    await issue.waitFor()
+    await screenshot(page, 'admin-cli-desktop')
+    await issue.click()
+    const token = page.getByLabel('CLI Token（仅本次显示）')
+    await token.waitFor()
+    const headers = { Authorization: `Bearer ${await token.inputValue()}` }
+    expect((await fetch(`${origin}/api/cli/users`, { headers })).status).toBe(200)
+    await page.getByRole('button', { name: '撤销 CLI Token' }).click()
+    await token.waitFor({ state: 'detached' })
+    expect((await fetch(`${origin}/api/cli/users`, { headers })).status).toBe(401)
 
     await page.getByRole('link', { name: '可发布仓库' }).click()
     await page.getByText('zixiao-labs/handbook', { exact: true }).waitFor()

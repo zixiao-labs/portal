@@ -48,6 +48,7 @@ test('opening a pre-JWT database adds OAuth flow storage without replacing exist
     {
       using db = openStore(path)
       expect(db.prepare('SELECT count(*) AS count FROM github_flows').get()?.count).toBe(0)
+      expect(db.prepare('SELECT count(*) AS count FROM cli_credentials').get()?.count).toBe(0)
       expect(db.prepare('SELECT count(*) AS count FROM employee_github_links').get()?.count).toBe(0)
       expect(db.prepare('SELECT count(*) AS count FROM suspended_users').get()?.count).toBe(0)
       expect(db.prepare('SELECT count(*) AS count FROM publish_repositories').get()?.count).toBe(0)

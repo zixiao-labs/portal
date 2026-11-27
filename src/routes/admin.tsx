@@ -1,10 +1,12 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { AdminPage } from '../ui/admin'
+import { AdminPage, type AdminView } from '../ui/admin'
 
 export const Route = createFileRoute('/admin')({
   ssr: false,
-  validateSearch: (search): { view?: 'users' | 'repositories' } =>
-    search.view === 'users' || search.view === 'repositories' ? { view: search.view } : {},
+  validateSearch: (search): { view?: AdminView } =>
+    search.view === 'users' || search.view === 'repositories' || search.view === 'cli'
+      ? { view: search.view }
+      : {},
   head: () => ({
     meta: [{ title: '管理后台｜紫霄实验室' }, { name: 'robots', content: 'noindex, nofollow' }],
   }),

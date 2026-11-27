@@ -1,0 +1,8 @@
+{
+  "$schema": "https://context7.com/schema/context7.json",
+  "projectTitle": "Zixiao Laboratories Portal",
+  "description": "Portal authentication, CLI user administration, and GitHub Actions documentation publishing.",
+  "folders": ["docs"],
+  "excludeFolders": ["docs/drafts", "docs/private"],
+  "excludeFiles": ["README.md"]
+}

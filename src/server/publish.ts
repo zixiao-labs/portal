@@ -9,6 +9,7 @@ import remarkParse from 'remark-parse'
 import remarkRehype from 'remark-rehype'
 import { unified } from 'unified'
 import { organization, organizationRepository, validNumericId } from '../deployment.mjs'
+import { collectionPath, llmsPath } from '../doc-path'
 import { config } from './config'
 import { HttpError, readJson } from './http'
 import { canPublish, store, transaction, type Article } from './store'
@@ -198,6 +199,7 @@ export function replaceCollection(identity: Identity, articles: Article[], db = 
     for (const article of articles)
       insert.run(name, article.slug, article.title, article.summary, article.html, article.format)
   })
+  return name
 }
 
 export async function publish(request: Request) {
@@ -243,6 +245,11 @@ export async function publish(request: Request) {
     slugs.add(document.slug)
     articles.push(document)
   }
-  replaceCollection(identity, articles)
-  return { collection: identity.repository.split('/')[1], count: articles.length }
+  const collection = replaceCollection(identity, articles)
+  return {
+    collection,
+    count: articles.length,
+    url: origin + collectionPath(collection),
+    llmsTxt: origin + llmsPath(collection),
+  }
 }

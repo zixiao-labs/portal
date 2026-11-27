@@ -76,7 +76,12 @@ test('publish accepts only a short-lived, signed GitHub OIDC bearer for an allow
     expect(findDocument('project', 'start')).toBeUndefined()
     const published = await send(good)
     expect(published.status).toBe(200)
-    expect(await published.json()).toEqual({ collection: 'project', count: 1 })
+    expect(await published.json()).toEqual({
+      collection: 'project',
+      count: 1,
+      url: `${origin}/docs/project`,
+      llmsTxt: `${origin}/docs/project/llms.txt`,
+    })
     expect(findDocument('project', 'start')?.title).toBe('Start')
     expect((await send(good)).status).toBe(409)
     const otherRepo = {

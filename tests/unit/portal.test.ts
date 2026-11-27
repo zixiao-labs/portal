@@ -2,7 +2,7 @@ import { expect, test } from '@lightning-js/lightning'
 import { acceptsHost, adminEmails, deploymentOrigin } from '../../src/deployment.mjs'
 import { employeeLoginEmail, registerGithubUser, verifiedEmailUser } from '../../src/server/auth'
 import { actionsClaims, renderArticle, replaceCollection } from '../../src/server/publish'
-import { findDocument, listDocuments, openStore } from '../../src/server/store'
+import { findCollection, findDocument, listDocuments, openStore } from '../../src/server/store'
 import { readJson } from '../../src/server/http'
 
 test('production requires the exact HTTPS deployment host; local development is loopback only', () => {
@@ -115,6 +115,7 @@ test('publishing replaces one collection atomically and refuses replays, expired
   const grant = db.prepare('INSERT INTO publish_repositories VALUES (?, ?)')
   const revoke = db.prepare('DELETE FROM publish_repositories WHERE id=?')
   grant.run(key.repositoryId, key.repository)
+  expect(findCollection('project', db)).toBeUndefined()
   replaceCollection(key, [page], db)
   expect(findDocument('project', 'first', db)?.title).toBe('First')
   expect(() => replaceCollection(key, [next], db)).toThrow()
@@ -138,6 +139,7 @@ test('publishing replaces one collection atomically and refuses replays, expired
   replaceCollection(newKey, [next], db)
   expect(findDocument('project', 'first', db)).toBeUndefined()
   expect(listDocuments(db).articles.map((article) => article.slug)).toEqual(['next'])
+  expect(findCollection('project', db)?.articles.map((article) => article.slug)).toEqual(['next'])
 })
 
 test('request parsing enforces the actual body size without relying on Content-Length', async () => {
