@@ -92,13 +92,13 @@ export function Header() {
   return (
     <header className="site-header">
       <div className="header-inner">
-        <Link className="brand" to="/login">
+        <a className="brand" href="/api/auth/entry">
           <img src={logo} alt="" width="36" height="36" />
           <span>
             <strong>紫霄实验室</strong>
             <small lang="en">ZIXIAO LABORATORIES</small>
           </span>
-        </Link>
+        </a>
         <nav aria-label="主导航">
           <Link to="/docs">
             <BookOpen aria-hidden /> <span>文档库</span>

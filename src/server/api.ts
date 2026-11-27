@@ -10,6 +10,16 @@ export async function api(request: Request, path: string) {
   const { method } = request
   const { origin } = config()
   try {
+    if (path === '/api/auth/entry' && (method === 'GET' || method === 'HEAD')) {
+      return new Response(null, {
+        status: 302,
+        headers: {
+          Location: (await session(request)) ? '/account' : '/login',
+          'Cache-Control': 'private, no-store',
+          'X-Robots-Tag': 'noindex',
+        },
+      })
+    }
     if (path === '/api/auth/github' && method === 'GET') return await startGithub(request)
     if (path === '/api/auth/github/callback' && method === 'GET') return await finishGithub(request)
     if (path === '/api/publish' && method === 'POST') return json(await publish(request))
