@@ -1,6 +1,6 @@
 import { expect, test } from '@lightning-js/lightning'
-import { acceptsHost, deploymentOrigin } from '../../src/deployment.mjs'
-import { employeeLoginEmail, verifiedUser } from '../../src/server/auth'
+import { acceptsHost, adminEmails, deploymentOrigin } from '../../src/deployment.mjs'
+import { employeeLoginEmail, registerGithubUser, verifiedEmailUser } from '../../src/server/auth'
 import { actionsClaims, renderArticle, replaceCollection } from '../../src/server/publish'
 import { findDocument, listDocuments, openStore } from '../../src/server/store'
 import { readJson } from '../../src/server/http'
@@ -26,14 +26,31 @@ test('production requires the exact HTTPS deployment host; local development is 
 
 test('public GitHub profiles are visitors; only the exact verified work domain creates employees', () => {
   using db = openStore(':memory:')
-  expect(verifiedUser('reader@example.org', '100', db).employee).toBe(0)
-  expect(verifiedUser('reader@sub.zixiaolabs.com', '101', db).employee).toBe(0)
-  expect(verifiedUser(employeeLoginEmail(' Member@ZIXIAOLABS.com '), undefined, db).employee).toBe(
-    1,
-  )
+  expect(registerGithubUser('reader@example.org', '100', db).employee).toBe(0)
+  expect(registerGithubUser('reader@sub.zixiaolabs.com', '101', db).employee).toBe(0)
+  expect(registerGithubUser('new@zixiaolabs.com', '102', db).employee).toBe(1)
+  const employee = verifiedEmailUser(employeeLoginEmail(' Member@ZIXIAOLABS.com '), db)
+  expect(employee.employee).toBe(1)
   expect(() => employeeLoginEmail('reader@example.org')).toThrow()
   expect(() => employeeLoginEmail('reader@zixiaolabs.com.example.org')).toThrow()
-  expect(() => verifiedUser('changed@example.org', '100', db)).toThrow()
+  expect(() => registerGithubUser(employee.email, '103', db)).toThrow()
+  expect(() => registerGithubUser('changed@example.org', '100', db)).toThrow()
+  db.prepare('UPDATE users SET employee=0 WHERE id=?').run(employee.id)
+  expect(verifiedEmailUser(employee.email, db).employee).toBe(0)
+})
+
+test('admin bootstrap is opt-in and only accepts explicit employee mailboxes', () => {
+  expect(adminEmails(undefined).size).toBe(0)
+  expect(adminEmails(' ADMIN@zixiaolabs.com , ops@zixiaolabs.com ')).toEqual(
+    new Set(['admin@zixiaolabs.com', 'ops@zixiaolabs.com']),
+  )
+  for (const value of [
+    '*@example.org',
+    'zixiaolabs.com',
+    'x@sub.zixiaolabs.com',
+    'staff@zixiaolabs.com,',
+  ])
+    expect(() => adminEmails(value)).toThrow()
 })
 
 test('documentation only renders safe static content from all three formats', async () => {
@@ -75,33 +92,50 @@ const workflow = {
 }
 
 test('only the configured organization, workflow, repository, branch and environment match', () => {
-  expect(actionsClaims(workflow, 'zixiao-labs/project', '11').repositoryId).toBe('33')
+  expect(actionsClaims(workflow, '11').repositoryId).toBe('33')
   for (const wrong of [
     { repository_owner_id: '12' },
+    { repository_owner: 'different' },
+    { repository_id: 'not-a-number' },
     { ref: 'refs/heads/feature' },
     { event_name: 'pull_request_target' },
     { environment: 'preview' },
     { workflow_ref: 'zixiao-labs/project/.github/workflows/other.yml@refs/heads/main' },
+    { job_workflow_ref: 'zixiao-labs/project/.github/workflows/other.yml@refs/heads/main' },
     { repository: 'zixiao-labs/different' },
   ])
-    expect(() => actionsClaims({ ...workflow, ...wrong }, 'zixiao-labs/project', '11')).toThrow()
+    expect(() => actionsClaims({ ...workflow, ...wrong }, '11')).toThrow()
 })
 
-test('publishing replaces one collection atomically and refuses reused identities and revoked tokens', async () => {
+test('publishing replaces one collection atomically and refuses replays, expired identities and repository collisions', async () => {
   using db = openStore(':memory:')
-  const key = actionsClaims(workflow, 'zixiao-labs/project', '11')
+  const key = actionsClaims(workflow, '11')
   const page = await renderArticle('first.md', '# First\n\nRead me.')
   const next = await renderArticle('next.html', '<h1>Next</h1><p>Read this instead.</p>')
-  replaceCollection(workflow.repository, key, [page], () => true, db)
+  const grant = db.prepare('INSERT INTO publish_repositories VALUES (?, ?)')
+  const revoke = db.prepare('DELETE FROM publish_repositories WHERE id=?')
+  grant.run(key.repositoryId, key.repository)
+  replaceCollection(key, [page], db)
   expect(findDocument('project', 'first', db)?.title).toBe('First')
-  expect(() => replaceCollection(workflow.repository, key, [next], () => true, db)).toThrow()
+  expect(() => replaceCollection(key, [next], db)).toThrow()
   const newKey = { ...key, jwtId: 'run-2' }
+  expect(() => replaceCollection(newKey, [next, next], db)).toThrow()
+  expect(() => replaceCollection({ ...newKey, expires: 1 }, [next], db)).toThrow()
+  revoke.run(key.repositoryId)
+  expect(() => replaceCollection(newKey, [next], db)).toThrow('没有文档发布权限')
+  grant.run('44', key.repository)
+  expect(() => replaceCollection({ ...newKey, repositoryId: '44' }, [next], db)).toThrow(
+    '需要管理员迁移',
+  )
+  revoke.run('44')
+  grant.run(key.repositoryId, 'zixiao-labs/renamed')
   expect(() =>
-    replaceCollection(workflow.repository, newKey, [next, next], () => true, db),
-  ).toThrow()
-  expect(() => replaceCollection(workflow.repository, newKey, [next], () => false, db)).toThrow()
+    replaceCollection({ ...newKey, repository: 'zixiao-labs/renamed' }, [next], db),
+  ).toThrow('需要管理员迁移')
   expect(listDocuments(db).articles[0]?.slug).toBe('first')
-  replaceCollection(workflow.repository, newKey, [next], () => true, db)
+  revoke.run(key.repositoryId)
+  grant.run(key.repositoryId, key.repository)
+  replaceCollection(newKey, [next], db)
   expect(findDocument('project', 'first', db)).toBeUndefined()
   expect(listDocuments(db).articles.map((article) => article.slug)).toEqual(['next'])
 })

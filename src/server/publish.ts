@@ -8,10 +8,10 @@ import remarkMdx from 'remark-mdx'
 import remarkParse from 'remark-parse'
 import remarkRehype from 'remark-rehype'
 import { unified } from 'unified'
-import { employeeDomain, organization } from '../deployment.mjs'
+import { organization, organizationRepository, validNumericId } from '../deployment.mjs'
 import { config } from './config'
-import { hash, HttpError, readJson } from './http'
-import { store, transaction, type Article } from './store'
+import { HttpError, readJson } from './http'
+import { canPublish, store, transaction, type Article } from './store'
 
 const issuer = 'https://token.actions.githubusercontent.com'
 const keys = createRemoteJWKSet(new URL(`${issuer}/.well-known/jwks`))
@@ -32,36 +32,30 @@ const sanitizeSchema = {
   clobberPrefix: 'doc-',
 }
 
-export function repositoryName(value: unknown) {
-  const expression = new RegExp(`^${organization}/[a-z0-9][a-z0-9_.-]{0,99}$`)
-  if (typeof value !== 'string' || !expression.test(value.toLowerCase())) {
-    throw new HttpError(400, `请输入 ${organization} 组织下的仓库。`)
-  }
-  return value.toLowerCase()
-}
-
-export function actionsClaims(claims: JWTPayload, expectedRepo: string, orgId: string) {
+export function actionsClaims(claims: JWTPayload, orgId: string) {
+  const repository = organizationRepository(claims.repository)
   const repositoryId = claims.repository_id
+  const expectedWorkflow = `${claims.repository}/${workflow}@${mainRef}`
   if (
     claims.repository_owner_id !== orgId ||
     claims.repository_owner !== organization ||
-    typeof claims.repository !== 'string' ||
-    claims.repository.toLowerCase() !== expectedRepo ||
-    typeof repositoryId !== 'string' ||
-    !/^\d+$/.test(repositoryId) ||
+    !repository ||
+    !validNumericId(repositoryId) ||
     claims.ref !== mainRef ||
     claims.environment !== environment ||
-    !['push', 'workflow_dispatch'].includes(String(claims.event_name)) ||
-    typeof claims.workflow_ref !== 'string' ||
-    claims.workflow_ref.toLowerCase() !== `${expectedRepo}/${workflow}@${mainRef}` ||
+    (claims.event_name !== 'push' && claims.event_name !== 'workflow_dispatch') ||
+    claims.workflow_ref !== expectedWorkflow ||
+    (claims.job_workflow_ref !== undefined && claims.job_workflow_ref !== expectedWorkflow) ||
     typeof claims.sha !== 'string' ||
     !/^[a-f0-9]{40}$/.test(claims.sha) ||
     typeof claims.jti !== 'string' ||
-    !claims.exp
+    !claims.jti ||
+    typeof claims.exp !== 'number' ||
+    !Number.isSafeInteger(claims.exp)
   ) {
     throw new HttpError(403, '仅允许组织内受保护的文档发布工作流。')
   }
-  return { repositoryId, revision: claims.sha, jwtId: claims.jti, expires: claims.exp }
+  return { repository, repositoryId, revision: claims.sha, jwtId: claims.jti, expires: claims.exp }
 }
 
 type Tree = {
@@ -172,17 +166,13 @@ export async function renderArticle(path: string, source: string): Promise<Artic
 }
 
 type Identity = ReturnType<typeof actionsClaims>
-export function replaceCollection(
-  repository: string,
-  identity: Identity,
-  articles: Article[],
-  authorized: () => boolean,
-  db = store(),
-) {
-  const published = Math.floor(Date.now() / 1000)
+export function replaceCollection(identity: Identity, articles: Article[], db = store()) {
+  const { repository } = identity
   const name = repository.split('/')[1]
   transaction(db, () => {
-    if (!authorized()) throw new HttpError(403, '发布 Token 已失效。')
+    if (!canPublish(identity.repositoryId, repository, db))
+      throw new HttpError(403, '此仓库没有文档发布权限。')
+    const published = Math.floor(Date.now() / 1000)
     if (identity.expires <= published) throw new HttpError(403, '工作流身份已过期。')
     db.prepare('DELETE FROM publish_runs WHERE expires<=?').run(published)
     const registered = db
@@ -213,36 +203,27 @@ export function replaceCollection(
 export async function publish(request: Request) {
   const { origin, orgId } = config()
   if (!orgId) throw new HttpError(503, '尚未启用文档发布。')
-  const bearer = request.headers
+  const assertion = request.headers
     .get('authorization')
-    ?.match(/^Bearer (zxp_[A-Za-z0-9_-]{43})$/)?.[1]
-  if (!bearer) throw new HttpError(401, '需要员工发布 Token。')
-  const db = store()
-  const tokenHash = hash(bearer)
-  const lookup = () =>
-    db
-      .prepare(`SELECT tokens.repository FROM tokens JOIN users ON users.id=tokens.user_id
-    WHERE hash=? AND expires>? AND employee=1 AND substr(email, instr(email, '@')+1)=?`)
-      .get(tokenHash, Math.floor(Date.now() / 1000), employeeDomain)?.repository
-  const repository = lookup()
-  if (typeof repository !== 'string') throw new HttpError(403, '发布 Token 无效或已过期。')
-  const assertion = request.headers.get('x-github-actions-oidc')
+    ?.match(/^Bearer ([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)$/i)?.[1]
   if (!assertion || assertion.length > 8192)
-    throw new HttpError(403, '需要 GitHub Actions OIDC 身份。')
+    throw new HttpError(401, '需要 GitHub Actions OIDC 身份。')
   let claims: JWTPayload
   try {
     const verified = await jwtVerify(assertion, keys, {
       issuer,
       audience: `${origin}/api/publish`,
       algorithms: ['RS256'],
-      requiredClaims: ['iat', 'exp', 'jti'],
+      requiredClaims: ['iat', 'exp', 'jti', 'sub'],
       maxTokenAge: '6 minutes',
     })
     claims = verified.payload
   } catch {
     throw new HttpError(403, '无法验证 GitHub Actions OIDC 身份。')
   }
-  const identity = actionsClaims(claims, repository, orgId)
+  const identity = actionsClaims(claims, orgId)
+  if (!canPublish(identity.repositoryId, identity.repository))
+    throw new HttpError(403, '此仓库没有文档发布权限。')
   const { files } = await readJson(request, 2 * 1024 * 1024)
   if (!Array.isArray(files) || !files.length || files.length > 250) {
     throw new HttpError(400, '每次需提交 1–250 篇文档。')
@@ -262,6 +243,6 @@ export async function publish(request: Request) {
     slugs.add(document.slug)
     articles.push(document)
   }
-  replaceCollection(repository, identity, articles, () => lookup() === repository, db)
-  return { collection: repository.split('/')[1], count: articles.length }
+  replaceCollection(identity, articles)
+  return { collection: identity.repository.split('/')[1], count: articles.length }
 }

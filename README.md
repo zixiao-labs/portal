@@ -1,8 +1,9 @@
 # 紫霄实验室门户 · Zixiao Laboratories
 
-- `/login`：公开的登录入口。任何用户都可通过 **GitHub** 登录／自动注册，但 GitHub 主邮箱必须已验证；工作邮箱验证码仅发给 `@zixiaolabs.com`，不开放公开邮箱注册。员工身份只来自验证通过的工作邮箱；用 GitHub 登录时，已验证的主邮箱须是工作邮箱。GitHub 主邮箱变更不会自动迁移现有账户。
-- `/account`：登录后读取账户资料。员工可按组织仓库签发、查看和撤销发布 Token；明文只显示一次，有效期 90 天。不需要登录的文档公开索引；个人中心与 API 不索引。
-- `/docs`：公开 SSR 文档库，带标题、描述、canonical、sitemap 与全文页面。由组织内 GitHub Actions 发布，不允许单独持 Token 上传。CLI 是路线图，目前没有发布命令。
+- `/login`：公开的登录入口。任何用户都可通过 **GitHub** 登录／自动注册；GitHub 注册要求主邮箱已验证。仅验证了 `@zixiaolabs.com` 工作邮箱才能注册员工账户。门户将会话 JWT 保存在 `HttpOnly` Cookie 中，7 天有效；退出登录后该会话立即失效。
+- `/account`：个人中心与 API 不索引。员工用工作邮箱登录后，可绑定自己的 GitHub 账号；之后可用同一个 GitHub 账号登录，门户中的工作邮箱和员工身份不会改变。不会按邮箱自动合并账户，也不会覆盖已有绑定。
+- `/admin`：管理后台。管理员可搜索、停用、恢复用户，结束其会话，以及授权或撤销多个组织仓库的文档发布权限。只有通过工作邮箱验证码登录的指定管理员能进入。
+- `/docs`：公开 SSR 文档库，带标题、描述、canonical、sitemap 与全文页面。仅接受获准仓库的 GitHub Actions 短期 OIDC 凭据，不接受网页会话、PAT 或长期发布 Token。
 - 页脚「外观」支持 UI Kit 的全部内置配色和组件风格，默认是 **紫霄配色 + 鹤坡 + 跟随系统**。可手动选择浅色或深色，浏览器会记住偏好。
 
 ## 本地工具链
@@ -19,6 +20,7 @@ pnpm lint
 pnpm build       # 同时生成 src/routeTree.gen.ts；全新工作树先执行它或 pnpm dev
 pnpm typecheck
 pnpm test
+pnpm test:action  # 需要 Python 3；验证发布 Action，不会发送真实请求
 pnpm test:visual # 需要 Docker；在与 CI 相同的 Linux/amd64 容器中构建并运行视觉测试
 ```
 
@@ -64,21 +66,30 @@ Nasti 2.11 的 Start 热更新暂时关闭；源文件变化后重新加载浏�
 | `PORTAL_SECRET` | `openssl rand -hex 32` 生成。已有部署沿用原值，不要每次发版都更换 |
 | `PORTAL_GITHUB_CLIENT_ID`、`PORTAL_GITHUB_CLIENT_SECRET` | 下文 OAuth App 的 Client ID 和 Client Secret |
 | `PORTAL_GITHUB_ORG_ID` | `gh api orgs/zixiao-labs --jq .id` 返回的数字组织 ID |
+| `PORTAL_ADMIN_EMAILS` | 启用后台时新增。填获授权的 `@zixiaolabs.com` 工作邮箱，多个用逗号分隔；留空禁用后台，不影响门户和已授权仓库 |
 | `SMTP_USER` | SMTP 登录用户名，阿里企业邮箱填完整邮箱地址 |
 | `SMTP_PASSWORD` | SMTP 客户端安全密码原文，无需 URL 编码或额外加引号 |
 
 默认通过 `portal-deploy@zixiaolabs.com:22` 连接。需要变更时，在 `production` 环境的 **Variables** 设置 `DEPLOY_USER`、`DEPLOY_HOST`（DNS 名或 IPv4）、`DEPLOY_PORT`。ARM64（`aarch64`）服务器需要在 **仓库级 Actions Variables** 设置 `PORTAL_DEPLOY_ARCH=arm64`；`x86_64` 无需设置。准备就绪后，在同一仓库级位置设置 `PORTAL_DEPLOY_ENABLED=true`，然后在 Actions → **Verify portal** 选择 `main` 手动运行，或等下一次推送到 `main`。运行时凭证经 SSH 传入，不需要预先创建服务器 `.env` 文件；服务器上拥有 Docker 权限的用户仍可读取运行时环境。
 
+JWT 沿用 `PORTAL_SECRET` 派生签名密钥，GitHub 绑定沿用现有 OAuth App 及回调地址；文档发布也不需要新建 Secret。镜像的 SSH 发布与文档的 OIDC 发布是两条链路，保留现有 SSH、OAuth 和 SMTP 配置。
+
 上线后检查 `curl -I http://zixiaolabs.com/`（跳转 HTTPS）、`curl -i https://zixiaolabs.com/`（`301` 到 `/login`）、`https://zixiaolabs.com/sitemap.xml`，并实测 GitHub 登录、邮箱验证码与文档发布。SQLite 保存在 `zixiao-portal-data` 命名卷；请定期做 SQLite `.backup` 或停机备份，不要删卷或只拷贝活动数据库主文件。若已有部署使用其他位置的数据库，**先备份并迁移到该卷，再启用 CD**。单实例替换会有短暂中断；若主机宕机等中断留下 `zixiao-portal-previous`，先用 `docker ps -a` 确认当前容器状态，恢复或清理旧容器后再发布。定期检查磁盘并清理不再使用的旧镜像。
+
+#### 从旧版升级
+
+1. 切换前备份 `zixiao-portal-data` 中的 SQLite。仍使用 `/data/portal.sqlite`；启动只新增 GitHub 授权流程、显式绑定、停用用户和发布授权表及索引。不删改已有账号、关联、文档和旧 Token 记录，不需要手工 SQL 或重建卷。
+2. 保持原 `PORTAL_SECRET`。旧的不透明会话 Cookie 不再接受，已登录用户需要重新登录一次。旧版可读取同一数据卷，但不识别新 JWT、纯 OIDC 工作流或新版停用记录；若必须回滚，先从工作邮箱和 GitHub 侧阻止已停用账号重新登录。回滚应用不会回退数据库。
+3. 设置 `PORTAL_ADMIN_EMAILS` 后部署门户，用工作邮箱登录后台为原计划发布的仓库逐一授权。发布授权初始为空：不会从历史 Token 自动推断对外发布权限，也不再读取 `PORTAL_PUBLISH_REPOSITORY_IDS`。切换各内容仓库的新工作流，从 `main` 试发成功后再移除旧 `PORTAL_PUBLISH_TOKEN` Secret。已有文档在切换期间仍可访问。
 
 ### GitHub OAuth App
 
 1. 以组织管理员进入 `zixiao-labs` 的 **Settings → Developer settings → OAuth Apps → New OAuth App**。
 2. 应用名填 `Zixiao Laboratories Portal`，Homepage URL 填 `https://zixiaolabs.com`，Authorization callback URL 填 `https://zixiaolabs.com/api/auth/github/callback`。
 3. 记录 Client ID，生成 Client Secret，只保存到门户仓库的 `production` 环境 Secret（见上表）。只需 `user:email`，不要授予仓库权限。不要把它配置到文档发布工作流或其他仓库。
-4. 分别用非员工账号与已验证主邮箱是 `@zixiaolabs.com` 的 GitHub 帐号实测。工作邮箱离职停用时，管理员也应撤销门户中的员工发布 Token、会话和 GitHub 关联账号的员工权限，不应只停用 SMTP。
+4. 分别实测访客 GitHub 注册、员工邮箱登录、在个人中心绑定 GitHub、退出后用所绑定的 GitHub 登录。显式绑定后依据 GitHub 数字账号 ID 识别身份，个人 GitHub 主邮箱可与工作邮箱不同。既有的 GitHub 自动注册/关联仍验证原主邮箱；已经关联其他门户账户的 GitHub 不会自动合并，请联系管理员处理。
 
-离职运维：备份 SQLite，在同一事务内对该员工的 `users` 记录设置 `employee=0`，并按相同 `user_id` 删除 `sessions` 和 `tokens`；不要删除 `users` 记录，否则仍持有 GitHub 工作邮箱验证的用户可能重新注册。同步移除相应 Actions 环境 Secret。
+离职运维：在管理后台停用账号，会结束该账号的会话并阻止重新登录，不删除账号或关联数据。若离职者是管理员，先从 `PORTAL_ADMIN_EMAILS` 移除并重新部署，再停用；仅通过 GitHub 登录不会获得管理权限。仍需同步关闭工作邮箱、移除 GitHub 仓库、分支和环境访问权。仓库发布权限不与个人账户绑定。
 
 ### 阿里企业邮箱（不用 25 端口）
 
@@ -100,14 +111,16 @@ Nasti 2.11 的 Start 热更新暂时关闭；源文件变化后重新加载浏�
 
 ### GitHub Actions：组织内文档发布
 
-1. 组织 **Settings → Actions → General** 中允许选定的组织仓库运行 Actions，并批准 GitHub 提供的 `actions/checkout`。保持默认 `GITHUB_TOKEN` 只读；发布 job 仅声明 `contents: read`、`id-token: write`。
-2. 将本仓库的 [publish-docs.yml](.github/workflows/publish-docs.yml) 原名放到每个**获准公开文档**的组织仓库。保护 `main`，对 `docs/**`、`.docsignore` 和发布 workflow 设 CODEOWNERS/必需审核。仓库 **Settings → Environments** 创建 `docs-publish`，只允许 `main`，建议设必需审批且禁止自我审批（以所在计划支持为准）。不要把发布 Secret 提供给 PR、fork 或任意未审核的工作流。
-3. 员工在个人中心为这个 `zixiao-labs/<repo>` 创建 Token，保存为 `docs-publish` 环境 Secret `PORTAL_PUBLISH_TOKEN`；设环境变量 `PORTAL_ORIGIN=https://zixiaolabs.com`。最后将**仓库级** Actions 变量 `PORTAL_DOCS_ENABLED` 设为 `true`，明确启用发布。若用组织级变量共享 Origin，请用 selected repositories 限定访问范围；每仓库的发布 Token 仍应独立。更新 Token 后撤销旧值。
-4. 提交 `docs/`，合到 `main` 自动发布，或在 Actions 选择 `main` 手动运行。服务器同时验证员工 Token 与 GitHub 签名的短期 OIDC，核对组织 ID、仓库、环境、工作流文件、分支、事件和 audience。同一 OIDC JWT 不能重复提交。`GITHUB_TOKEN`、GitHub PAT、工作站请求及仅有员工 Token 的请求不能替代 OIDC。
+1. **在门户授权仓库。** 管理员用工作邮箱登录，打开 **个人中心 → 管理后台 → 可发布仓库**，填 GitHub 仓库全名和数字 ID。用 `gh api repos/zixiao-labs/<repo> --jq .id` 查询 ID（私有仓库需有查询权限）。可同时授权多个仓库；新授权和撤销立即生效，不需要部署。门户根据 GitHub 签名的仓库名称和 ID 比对授权，不需要 PAT 或读取私有仓库的凭据。
+2. **在各内容仓库接入 Action。** 把 [工作流模板](.github/workflows/publish-docs.yml) 原名放在 `.github/workflows/`。选择以下一种安装方式；两种调用的是同一个可移植的 [Composite Action](.github/actions/publish-docs/action.yml)：
+   - **复制到获授权的组织仓库：** 把 [`.github/actions/publish-docs/`](.github/actions/publish-docs/) 一并复制到内容仓库，模板无需改动。复制到公开仓库前，请按 [License](License) 取得公开分发许可。
+   - **集中引用：** 将模板中的本地 Action 引用替换为 `uses: zixiao-labs/portal/.github/actions/publish-docs@<已审核的完整提交 SHA>`。调用方必须允许该 Action；如果门户仓库是私有的，还需在门户仓库 **Settings → Actions → General → Access** 中授权组织内的私有仓库访问。公开仓库不能直接引用私有 Action。
+3. **配置发布门槛。** 在内容仓库创建 `docs-publish` 环境，只允许 `main`，并建议启用必需审批、禁止自我审批（以所在计划支持为准）。保护 `main`，对 `docs/**`、`.docsignore`、发布 workflow 和仓库内的 Action 代码设 CODEOWNERS/必需审核。将**仓库级** Actions Variable `PORTAL_DOCS_ENABLED` 设为 `true`。模板仅授予 `contents: read`、`id-token: write`，不需要发布 Secret。默认发布到 `https://zixiaolabs.com`；已配置 `PORTAL_ORIGIN` 的仓库继续使用该地址。
+4. **试发。** 审核 `docs/` 的内容并合并到 `main`，或在 Actions 选择 `main` 手动运行。门户校验 GitHub 签名、时效、精确 audience `https://zixiaolabs.com/api/publish`、组织 ID、仓库 ID 和名称、工作流路径、分支、环境与事件，并拒绝重放。OIDC 验证的是运行该 Action 的工作流，不证明仓库已开启分支保护或审批；这些规则需在内容仓库配置。
 
 #### 文档格式、忽略与更新
 
 - 只收集 Git 跟踪的 `docs/` 下常规 `.md`、`.mdx`、`.html` 文件。路径各段使用小写英数字、`_`、`-`，首字符必须是英数字；`docs/guides/start.md` 发布为 `/docs/<repo>/guides/start`。同一路径不能同时存在不同扩展名。页面标题取第一条一级标题，摘要取首段。
-- 根目录 `.docsignore` 使用 gitignore 语法，例如 `/docs/drafts/`；标准 `.gitignore` 也会生效。不要用忽略规则替代内容审查：所有上传文档都可公开访问，即使来源是私有仓库。
+- 根目录 `.docsignore` 使用 gitignore 语法，例如 `/docs/drafts/`；标准 `.gitignore` 也会生效，两套规则独立计算，任一排除的文件都不会上传。不要用忽略规则替代内容审查：所有上传文档都可公开访问，即使来源是私有仓库。
 - MD 支持 GFM；HTML 会净化；MDX 支持 Markdown 和无属性的静态标签（如 `details`、`summary`、`kbd`、`mark`），拒绝自定义组件、表达式和 `import`/`export`。不会执行上传代码，也不代理资源；脚本、嵌入和图片不显示。文间链接用实际文档 URL，例如 `/docs/my-repo/guides/start`，不要链接源 `.md` 文件。
-- 每次发布是该仓库完整快照，SQLite 在一次事务内替换；从快照移除一篇即下线。每次 1–250 篇，JSON ≤ 2 MiB，单篇 ≤ 120,000 字符。误发布时先从内容仓库移除并重发；若需清空整个集合或仓库改名，请由管理员备份后维护数据库。撤销 Token 不会撤掉已发布的内容。
+- 每次发布是该仓库完整快照，SQLite 在一次事务内仅替换该仓库文档；从快照移除一篇即下线。每次 1–250 篇，JSON ≤ 2 MiB，单篇 ≤ 120,000 个 UTF-16 代码单元。误发布时先从内容仓库移除并重发；若需清空整个集合或迁移已发布仓库名称，请由管理员备份后维护数据库。撤销授权只会停止未来发布，不会下线已发布内容。

@@ -3,9 +3,12 @@ import { createHmac } from 'node:crypto'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { decodeJwt, decodeProtectedHeader } from 'jose'
 import nodemailer, { type SendMailOptions } from 'nodemailer'
 import { api } from '../../src/server/api'
+import { registerGithubUser, verifiedEmailUser } from '../../src/server/auth'
 import { hash, opaque } from '../../src/server/http'
+import { newSession } from '../../src/server/session'
 import { store } from '../../src/server/store'
 
 const origin = 'http://localhost:3000'
@@ -37,6 +40,10 @@ function post(path: string, body: object, headers?: HeadersInit) {
     }),
     path,
   )
+}
+
+function get(path: string, cookie?: string) {
+  return api(new Request(origin + path, { headers: cookie ? { cookie } : {} }), path.split('?')[0])
 }
 
 test('email delivery errors are private and can be retried; the sent code logs in', async () => {
@@ -133,43 +140,52 @@ test('employee codes are bound to the browser, single-use, and issue a session',
   const response = await post(path, { email, code }, headers)
   expect(response.status).toBe(200)
   const session = response.headers.getSetCookie()[0].split(';')[0]
+  expect(response.headers.getSetCookie()[0]).toContain('; HttpOnly; SameSite=Lax')
+  const jwt = session.slice('portal_session='.length)
+  expect(decodeProtectedHeader(jwt)).toEqual({ alg: 'HS256', typ: 'portal-session+jwt' })
+  const { sub, iat, exp, ...claims } = decodeJwt(jwt)
+  expect(claims).toEqual({
+    iss: origin,
+    aud: 'portal-web',
+    auth_method: 'email',
+    jti: expect.any(String),
+  })
+  expect(exp! - iat!).toBe(7 * 86400)
   expect((await post(path, { email, code }, headers)).status).toBe(400)
-  const account = await api(
-    new Request(`${origin}/api/account`, { headers: { cookie: session } }),
-    '/api/account',
-  )
-  expect(await account.json()).toEqual({ email, employee: true, github: false, tokens: [] })
+  expect(await (await get('/api/account', session)).json()).toEqual({
+    email,
+    employee: true,
+    github: false,
+  })
+  const forged = jwt.split('.')
+  forged[2] = (forged[2][0] === 'A' ? 'B' : 'A') + forged[2].slice(1)
+  const fakeSession = `portal_session=${forged.join('.')}`
+  const legacy = opaque()
+  // A persisted hash alone must not authorize an unsigned cookie or a tampered JWT.
+  for (const [token, cookie] of [
+    [legacy, `portal_session=${legacy}`],
+    [forged.join('.'), fakeSession],
+  ]) {
+    store().prepare('INSERT INTO sessions VALUES (?, ?, ?)').run(hash(token), sub!, exp!)
+    expect((await get('/api/account', cookie)).status).toBe(401)
+  }
   expect(
-    (
-      await post(
-        '/api/tokens',
-        { repository: 'zixiao-labs/project' },
-        { origin: 'http://example.org', cookie: session },
-      )
-    ).status,
+    (await post('/api/auth/logout', {}, { origin: 'http://example.org', cookie: session })).status,
   ).toBe(403)
-  const created = await post(
-    '/api/tokens',
-    { repository: 'zixiao-labs/project' },
-    { cookie: session },
-  )
-  const { token } = await created.json()
-  expect(created.status).toBe(201)
-  expect(
-    (await post('/api/publish', { files: [] }, { Authorization: `Bearer ${token}` })).status,
-  ).toBe(403)
+  expect((await post('/api/auth/logout', {}, { cookie: session })).status).toBe(200)
+  expect((await get('/api/account', session)).status).toBe(401)
 })
 
+const callback = '/api/auth/github/callback'
+
 test('GitHub registers a public visitor only after state, PKCE and verified primary email', async () => {
-  const entry = '/api/auth/github'
-  const start = await api(new Request(origin + entry), entry)
+  const start = await get('/api/auth/github')
   const authorize = new URL(start.headers.get('location')!)
   expect(authorize.origin).toBe('https://github.com')
   expect(authorize.searchParams.get('code_challenge_method')).toBe('S256')
   const cookie = start.headers.getSetCookie()[0].split(';')[0]
-  const verifier = cookie.split('.')[1]
+  const verifier = cookie.slice('portal_oauth='.length)
   expect(authorize.searchParams.get('code_challenge')).toBe(hash(verifier))
-  const callback = '/api/auth/github/callback'
   const remote = vi.fn(async (url: string, request?: RequestInit) => {
     if (url === 'https://github.com/login/oauth/access_token') {
       expect((request!.body as URLSearchParams).get('code_verifier')).toBe(verifier)
@@ -185,23 +201,109 @@ test('GitHub registers a public visitor only after state, PKCE and verified prim
   })
   vi.stubGlobal('fetch', remote)
   try {
-    const wrongState = await api(
-      new Request(`${origin}${callback}?code=abc&state=wrong`, { headers: { cookie } }),
-      callback,
-    )
+    const wrongState = await get(`${callback}?code=abc&state=${opaque()}`, cookie)
     expect(wrongState.headers.get('location')).toBe(`${origin}/login?error=github`)
     expect(remote).not.toHaveBeenCalled()
     const state = authorize.searchParams.get('state')
-    const success = await api(
-      new Request(`${origin}${callback}?code=abc&state=${state}`, { headers: { cookie } }),
-      callback,
-    )
+    const success = await get(`${callback}?code=abc&state=${state}`, cookie)
     expect(success.headers.get('location')).toBe(`${origin}/account`)
     const session = success.headers.getSetCookie()[1].split(';')[0]
+    expect(await (await get('/api/account', session)).json()).toEqual({
+      email: 'user@example.org',
+      employee: false,
+      github: true,
+    })
+    expect((await post('/api/auth/github/link', {}, { cookie: session })).status).toBe(403)
+    expect((await get(`${callback}?code=abc&state=${state}`, cookie)).headers.get('location')).toBe(
+      `${origin}/login?error=github`,
+    )
+    expect(remote).toHaveBeenCalledTimes(3)
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})
+
+test('employee linking requires the same active browser session, rejects collisions and keeps the work email', async () => {
+  const email = 'link@zixiaolabs.com'
+  const employee = verifiedEmailUser(email)
+  const original = await newSession(new Request(origin), employee, 'email')
+  const session = original.split(';')[0]
+  const otherSession = (await newSession(new Request(origin), employee, 'email')).split(';')[0]
+  const path = '/api/auth/github/link'
+  expect((await post(path, {})).status).toBe(401)
+  expect((await post(path, {}, { origin: 'https://example.org', cookie: session })).status).toBe(
+    403,
+  )
+  expect((await get(path, session)).status).toBe(404)
+
+  const start = async () => {
+    const response = await post(path, {}, { cookie: session })
+    expect(response.status).toBe(200)
+    const authorize = new URL((await response.json()).url)
+    expect(authorize.searchParams.get('prompt')).toBe('select_account')
+    const proof = response.headers.getSetCookie()[0].split(';')[0]
+    return { proof, url: `${callback}?code=abc&state=${authorize.searchParams.get('state')}` }
+  }
+  let githubId = 2345
+  registerGithubUser('already-linked@example.org', String(githubId))
+  const remote = vi.fn(async (url: string) => {
+    if (url.endsWith('/access_token')) return Response.json({ access_token: 'mock-access-token' })
+    if (url.endsWith('/user')) return Response.json({ id: githubId })
+    throw new Error('An already-linked identity does not need email lookup')
+  })
+  vi.stubGlobal('fetch', remote)
+  try {
+    const mismatch = await start()
     expect(
-      (await post('/api/tokens', { repository: 'zixiao-labs/project' }, { cookie: session }))
-        .status,
-    ).toBe(403)
+      (await get(mismatch.url, `${otherSession}; ${mismatch.proof}`)).headers.get('location'),
+    ).toBe(`${origin}/account?github=error`)
+    expect(remote).not.toHaveBeenCalled()
+    // Even the original browser cannot reuse a consumed OAuth state.
+    expect((await get(mismatch.url, `${session}; ${mismatch.proof}`)).headers.get('location')).toBe(
+      `${origin}/login?error=github`,
+    )
+
+    const conflict = await start()
+    expect((await get(conflict.url, `${session}; ${conflict.proof}`)).headers.get('location')).toBe(
+      `${origin}/account?github=conflict`,
+    )
+    expect(await (await get('/api/account', session)).json()).toEqual({
+      email,
+      employee: true,
+      github: false,
+    })
+
+    githubId++
+    const revoked = await start()
+    const remove = remote.mockImplementationOnce(async () => {
+      await post('/api/auth/logout', {}, { cookie: session })
+      return Response.json({ access_token: 'mock-access-token' })
+    })
+    expect((await get(revoked.url, `${session}; ${revoked.proof}`)).headers.get('location')).toBe(
+      `${origin}/account?github=error`,
+    )
+    expect(remove).toHaveBeenCalled()
+    expect((await (await get('/api/account', otherSession)).json()).github).toBe(false)
+
+    const retry = await post(path, {}, { cookie: otherSession })
+    const state = new URL((await retry.json()).url).searchParams.get('state')
+    const proof = retry.headers.getSetCookie()[0].split(';')[0]
+    expect(
+      (await get(`${callback}?code=abc&state=${state}`, `${otherSession}; ${proof}`)).headers.get(
+        'location',
+      ),
+    ).toBe(`${origin}/account?github=linked`)
+    expect((await post(path, {}, { cookie: otherSession })).status).toBe(409)
+    const login = await get('/api/auth/github')
+    const loginState = new URL(login.headers.get('location')!).searchParams.get('state')
+    const loginProof = login.headers.getSetCookie()[0].split(';')[0]
+    const signedIn = await get(`${callback}?code=xyz&state=${loginState}`, loginProof)
+    const cookie = signedIn.headers.getSetCookie()[1].split(';')[0]
+    expect(await (await get('/api/account', cookie)).json()).toEqual({
+      email,
+      employee: true,
+      github: true,
+    })
   } finally {
     vi.unstubAllGlobals()
   }

@@ -310,8 +310,7 @@ h2 {
   gap: 12px;
 }
 .form-stack button,
-.issued-secret button,
-.token-list button,
+.account-link button,
 .workspace-head button {
   min-height: 44px;
 }
@@ -394,11 +393,8 @@ h2 {
   height: 18px;
   flex: none;
 }
-.account-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
-  align-items: start;
-  gap: 20px;
+.account-sheet {
+  max-width: 620px;
 }
 .account-details {
   margin-bottom: 10px;
@@ -415,36 +411,78 @@ h2 {
   margin: 5px 0 0;
   overflow-wrap: anywhere;
 }
-.issued-secret {
-  margin-top: 16px;
-  padding: 14px;
-  background: var(--zx-surface-subtle);
+.account-link {
+  margin-bottom: 20px;
 }
-.issued-secret p {
+.account-link p {
   margin-top: 0;
 }
-.issued-secret code {
-  display: block;
-  overflow-wrap: anywhere;
-  margin-bottom: 10px;
+.account-links,
+.admin-nav,
+.admin-form,
+.admin-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
 }
-.token-list,
+.admin-nav {
+  margin-bottom: 18px;
+}
+.admin-nav a {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 16px;
+  color: var(--zx-text);
+  text-decoration: none;
+  border-bottom: 2px solid var(--zx-border);
+}
+.admin-nav a[data-selected='true'] {
+  border-color: var(--mark);
+  background: var(--zx-surface-raised);
+  font-weight: 700;
+}
+.admin-form {
+  align-items: end;
+  margin-top: 20px;
+}
+.admin-form > :not(button) {
+  min-width: min(200px, 100%);
+}
+.admin-form input {
+  min-height: 44px;
+  font-size: 16px;
+}
+.admin-panel button {
+  min-height: 44px;
+}
+.admin-hint {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.admin-list {
+  list-style: none;
+  margin: 24px 0;
+  padding: 0;
+}
+.admin-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px 16px;
+  border-top: 1px solid var(--zx-border);
+  padding: 12px 0;
+  overflow-wrap: anywhere;
+}
+.admin-row small {
+  display: block;
+  color: var(--zx-muted);
+}
 .document-list {
   padding: 0;
   list-style: none;
 }
-.token-list li {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 0;
-  border-top: 1px solid var(--zx-border);
-}
-.token-list b {
-  overflow-wrap: anywhere;
-}
-.token-list small,
 .document-list small {
   display: block;
   color: var(--zx-muted);
@@ -537,8 +575,7 @@ h2 {
 }
 
 @media (max-width: 760px) {
-  .login-stage,
-  .account-layout {
+  .login-stage {
     grid-template-columns: minmax(0, 1fr);
   }
   .frontispiece {
