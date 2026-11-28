@@ -4,5 +4,7 @@
   "description": "Portal authentication, CLI user administration, and GitHub Actions documentation publishing.",
   "folders": ["docs"],
   "excludeFolders": ["docs/drafts", "docs/private"],
-  "excludeFiles": ["README.md"]
+  "excludeFiles": ["README.md"],
+  "public_key": "pk_AqlsMtJn5G0ur5mfxzqJ6",
+  "url": "https://context7.com/zixiao-labs/portal"
 }
