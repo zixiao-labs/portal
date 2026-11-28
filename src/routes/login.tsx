@@ -16,13 +16,14 @@ export const Route = createFileRoute('/login')({
     if (state === 'signed-out' || (search.verifyEmail && state === 'email-required')) return
     throw redirect({ to: '/account', replace: true, statusCode: 302 })
   },
-  head: () => ({
+  head: ({ match }) => ({
     meta: [
       { title: '登录｜紫霄实验室 Zixiao Laboratories' },
       {
         name: 'description',
         content: '登录紫霄实验室门户。支持 GitHub 登录，以及面向紫霄实验室员工的工作邮箱验证。',
       },
+      ...(match.search.mcp ? [{ name: 'robots', content: 'noindex, nofollow' }] : []),
     ],
     links: [{ rel: 'canonical', href: `${canonicalOrigin}/login` }],
   }),

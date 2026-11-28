@@ -170,7 +170,8 @@ export async function startGithub(request: Request, link = false) {
   }
   if (!cfg.clientId || !cfg.clientSecret) {
     if (link) throw new HttpError(503, 'GitHub 授权暂未配置。')
-    return Response.redirect(`${cfg.origin}/login?error=setup`, 303)
+    const fromMcp = new URL(request.url).searchParams.get('mcp') === 'true'
+    return Response.redirect(`${cfg.origin}/login?error=setup${fromMcp ? '&mcp=true' : ''}`, 303)
   }
 
   const state = opaque()
@@ -198,14 +199,14 @@ export async function startGithub(request: Request, link = false) {
   }).toString()
   const proof = setCookie(cfg.origin, cookieName(cfg.origin, 'oauth'), verifier, codeAge)
   if (link) return json({ url: url.href }, 200, [proof])
-  return new Response(null, {
-    status: 303,
-    headers: {
-      Location: url.href,
-      'Cache-Control': 'no-store',
-      'Set-Cookie': proof,
-    },
-  })
+  const headers = new Headers({ Location: url.href, 'Cache-Control': 'no-store' })
+  headers.append('Set-Cookie', proof)
+  if (new URL(request.url).searchParams.get('mcp') === 'true')
+    headers.append(
+      'Set-Cookie',
+      setCookie(cfg.origin, cookieName(cfg.origin, 'oauth_mcp_return'), hash(verifier), codeAge),
+    )
+  return new Response(null, { status: 303, headers })
 }
 
 function linkGithub(tokenHash: string, userId: string, githubId: string) {
@@ -225,13 +226,21 @@ export async function finishGithub(request: Request) {
   const cfg = config()
   const name = cookieName(cfg.origin, 'oauth')
   const clear = setCookie(cfg.origin, name, '', 0)
+  const returnCookie = cookieName(cfg.origin, 'oauth_mcp_return')
   const url = new URL(request.url)
   const verifier = cookie(request, name) || ''
+  const fromMcp = proofFormat.test(verifier) && cookie(request, returnCookie) === hash(verifier)
   const state = url.searchParams.get('state') || ''
   const code = url.searchParams.get('code')
   const redirect = (path: string, issued?: string) => {
-    const headers = new Headers({ Location: cfg.origin + path, 'Cache-Control': 'no-store' })
+    const location = new URL(path, cfg.origin)
+    if (fromMcp && (path === '/account' || location.pathname === '/login')) {
+      location.pathname = '/login'
+      location.searchParams.set('mcp', 'true')
+    }
+    const headers = new Headers({ Location: location.href, 'Cache-Control': 'no-store' })
     headers.append('Set-Cookie', clear)
+    if (fromMcp) headers.append('Set-Cookie', setCookie(cfg.origin, returnCookie, '', 0))
     if (issued) headers.append('Set-Cookie', issued)
     return new Response(null, { status: 303, headers })
   }

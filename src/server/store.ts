@@ -79,6 +79,18 @@ export function openStore(path: string) {
     );
     CREATE INDEX IF NOT EXISTS mcp_grants_session ON mcp_grants(session_hash);
     CREATE INDEX IF NOT EXISTS mcp_grants_expiry ON mcp_grants(expires);
+    CREATE INDEX IF NOT EXISTS mcp_grants_client ON mcp_grants(client_hash);
+    CREATE TABLE IF NOT EXISTS oauth_apps (
+      client_id TEXT PRIMARY KEY, client_hash TEXT NOT NULL UNIQUE,
+      owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      name TEXT NOT NULL, redirect_uris TEXT NOT NULL,
+      scope TEXT NOT NULL CHECK(scope IN ('docs:read', 'oauth:apps', 'docs:repositories'))
+    );
+    CREATE INDEX IF NOT EXISTS oauth_apps_owner ON oauth_apps(owner_id);
+    CREATE TABLE IF NOT EXISTS oauth_consumed_flows (
+      id TEXT PRIMARY KEY, expires INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS oauth_consumed_flows_expiry ON oauth_consumed_flows(expires);
   `)
   return db
 }
@@ -106,6 +118,21 @@ export function listDocuments(db = store()) {
     .prepare(`${articleColumns} ORDER BY collection, slug`)
     .all() as DocumentEntry[]
   return { collections, articles }
+}
+
+export function searchDocuments(
+  query: string,
+  collection: string | undefined,
+  offset: number,
+  db = store(),
+) {
+  const text = query.toLowerCase()
+  return db
+    .prepare(`${articleColumns}
+    WHERE (? IS NULL OR collection=?) AND (
+      ?='' OR instr(lower(title), ?) OR instr(lower(summary), ?) OR instr(lower(slug), ?)
+    ) ORDER BY collection, slug LIMIT 21 OFFSET ?`)
+    .all(collection ?? null, collection ?? null, text, text, text, text, offset) as DocumentEntry[]
 }
 
 export function findCollection(name: string, db = store()) {

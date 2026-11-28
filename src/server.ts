@@ -26,7 +26,7 @@ export default createServerEntry({
     const discovery = documentDiscovery(request, url.pathname, origin)
     if (discovery) return discovery
     const response = await render(request, options)
-    const privateArea = /^\/(?:account|admin)\/?$/.test(url.pathname)
+    const privateArea = /^\/(?:account|admin)(?:\/|$)/.test(url.pathname)
     const login = /^\/login\/?$/.test(url.pathname)
     const mcpLogin = login && url.searchParams.get('mcp') === 'true'
     const emailVerification = login && url.searchParams.get('verifyEmail') === 'true'
@@ -34,7 +34,7 @@ export default createServerEntry({
     if (privateArea || mcpLogin || emailVerification) {
       response.headers.set('X-Robots-Tag', 'noindex')
     }
-    if (mcpLogin) {
+    if (privateArea || mcpLogin) {
       response.headers.set('Content-Security-Policy', "frame-ancestors 'none'")
       response.headers.set('Referrer-Policy', 'same-origin')
     }

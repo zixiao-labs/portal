@@ -15,7 +15,7 @@ Browse [the documentation library](https://zixiaolabs.com/docs). A repository na
 ## Automate portal tasks
 
 - [CLI user administration](https://zixiaolabs.com/docs/portal/cli-user-management): Issue a short-lived CLI credential, find users, suspend or restore accounts, and revoke sessions.
-- [MCP repository administration](https://zixiaolabs.com/docs/portal/mcp): Connect with OAuth and register or revoke repository publishing permissions.
+- [Portal OAuth and MCP](https://zixiaolabs.com/docs/portal/mcp): Connect to read public docs when signed in, manage employee OAuth applications, or manage repository publishing grants as an administrator.
 - [Publish and index repository documentation](https://zixiaolabs.com/docs/portal/publish-docs): Configure a GitHub Actions job, submit a full snapshot, and register the public collection with Context7.
 
 User administration, MCP repository grants, and snapshot publishing use different credentials. A Portal CLI or MCP token cannot publish documents. The documentation library is public, so never include secrets or internal-only content in a publishable snapshot.

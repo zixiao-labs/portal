@@ -123,15 +123,18 @@ async function mockGithubAuthorization(page: Page) {
   })
   // Unlike linking, login starts with a server redirect. Playwright routes the
   // first request in a redirect chain, not the subsequent navigation to GitHub.
-  await page.route(`${origin}/api/auth/github`, async (route) => {
-    const response = await route.fetch({ maxRedirects: 0 })
-    expect(response.status()).toBe(303)
-    const headers = response.headers()
-    await route.fulfill({
-      response,
-      headers: { ...headers, location: authorize(headers.location).href },
-    })
-  })
+  await page.route(
+    (url) => url.origin === origin && url.pathname === '/api/auth/github',
+    async (route) => {
+      const response = await route.fetch({ maxRedirects: 0 })
+      expect(response.status()).toBe(303)
+      const headers = response.headers()
+      await route.fulfill({
+        response,
+        headers: { ...headers, location: authorize(headers.location).href },
+      })
+    },
+  )
 }
 
 // Snapshot a downsampled PNG, not the DOM: broad layout and palette changes are
@@ -596,13 +599,17 @@ test('MCP authorization returns to the client after work-email verification and 
       resource: `${origin}/api/mcp`,
       authorization_servers: [origin],
     })
-    const registration = await fetch(`${oauth}/register`, {
+    const registration = await fetch(`${origin}/api/account/oauth-apps`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ redirect_uris: [callback], token_endpoint_auth_method: 'none' }),
+      headers: { 'Content-Type': 'application/json', Origin: origin, Cookie: adminSession },
+      body: JSON.stringify({
+        name: 'Portal publishing client',
+        redirectUris: [callback],
+        scope: 'docs:repositories',
+      }),
     })
     expect(registration.status).toBe(201)
-    const { client_id } = await registration.json()
+    const { clientId: client_id } = await registration.json()
     const verifier = opaque()
     const state = opaque()
     const login = await page.goto(
@@ -652,6 +659,150 @@ test('MCP authorization returns to the client after work-email verification and 
     await page.close()
     mail.mockRestore()
     vi.unstubAllEnvs()
+  }
+})
+
+test('OAuth apps register, share read-only consent with a GitHub visitor and revoke from the GUI', async () => {
+  const page = await browser!.newPage({
+    viewport: { width: 1440, height: 900 },
+    colorScheme: 'light',
+    reducedMotion: 'reduce',
+  })
+  const visitor = await browser!.newPage({
+    viewport: { width: 390, height: 844 },
+    colorScheme: 'light',
+    reducedMotion: 'reduce',
+  })
+  const fetchHttp = globalThis.fetch
+  vi.stubGlobal('fetch', (input: string, options?: RequestInit) => {
+    if (input === 'https://github.com/login/oauth/access_token')
+      return Promise.resolve(Response.json({ access_token: 'fake-access-token' }))
+    if (input === 'https://api.github.com/user')
+      return Promise.resolve(Response.json({ id: 12345 }))
+    if (input === 'https://api.github.com/user/emails?per_page=100')
+      return Promise.resolve(
+        Response.json([{ email: 'reader@example.org', primary: true, verified: true }]),
+      )
+    return fetchHttp(input, options)
+  })
+  try {
+    const appsApi = `${origin}/api/account/oauth-apps`
+    const appsPage = `${origin}/account/oauth-apps`
+    const oauth = `${origin}/api/mcp/oauth`
+    const callback = `${origin}/docs`
+    const privateResponse = await fetchHttp(appsPage)
+    expect(privateResponse.headers.get('x-robots-tag')).toBe('noindex')
+    expect(privateResponse.headers.get('content-security-policy')).toContain(
+      "frame-ancestors 'none'",
+    )
+    const ownerSession = await newSession(
+      new Request(origin),
+      {
+        id: 1,
+        email: 'employee@zixiaolabs.com',
+        employee: 1,
+        github_id: null,
+      },
+      'email',
+    )
+    await page.context().addCookies([
+      {
+        name: 'portal_session',
+        value: ownerSession.split(';')[0].split('=')[1],
+        url: origin,
+        httpOnly: true,
+      },
+    ])
+    await page.goto(`${origin}/account`)
+    await page.getByRole('link', { name: 'OAuth 应用' }).click()
+    await page.getByRole('button', { name: '注册应用' }).click()
+    await screenshot(page, 'oauth-registration-desktop')
+    await page.getByLabel('应用名称').fill('Handbook reader')
+    const redirect = page.getByLabel('回调地址')
+    await redirect.fill('http://example.org/callback')
+    await page.getByRole('button', { name: '确认注册' }).click()
+    await page.getByRole('alert').filter({ hasText: '回调地址' }).waitFor()
+    expect(await page.getByLabel('应用名称').inputValue()).toBe('Handbook reader')
+    await redirect.fill(callback)
+    const registration = page.waitForResponse(
+      (response) => response.url() === appsApi && response.status() === 201,
+    )
+    await page.getByRole('button', { name: '确认注册' }).click()
+    const { clientId } = await (await registration).json()
+    const row = page.getByRole('listitem').filter({ hasText: 'Handbook reader' })
+    await row.getByText(clientId, { exact: true }).waitFor()
+
+    await mockGithubAuthorization(visitor)
+    const verifier = opaque()
+    await visitor.goto(
+      `${oauth}/authorize?${new URLSearchParams({
+        client_id: clientId,
+        redirect_uri: callback,
+        response_type: 'code',
+        code_challenge: hash(verifier),
+        code_challenge_method: 'S256',
+        scope: 'docs:read',
+      })}`,
+    )
+    await visitor.getByRole('link', { name: '使用 GitHub 登录' }).click()
+    const approve = visitor.getByRole('button', { name: '允许读取文档' })
+    await approve.waitFor()
+    expect(await visitor.getByText('Handbook reader', { exact: true }).count()).toBe(1)
+    await screenshot(visitor, 'oauth-read-consent-mobile')
+    await approve.click()
+    await visitor.waitForURL((url) => url.pathname === '/docs' && url.searchParams.has('code'))
+    const tokenResponse = await fetchHttp(`${oauth}/token`, {
+      method: 'POST',
+      body: new URLSearchParams({
+        client_id: clientId,
+        redirect_uri: callback,
+        grant_type: 'authorization_code',
+        code: new URL(visitor.url()).searchParams.get('code')!,
+        code_verifier: verifier,
+      }),
+    })
+    expect(tokenResponse.status).toBe(200)
+    const { access_token } = await tokenResponse.json()
+    const auth = () =>
+      fetchHttp(`${origin}/api/mcp`, { headers: { Authorization: `Bearer ${access_token}` } })
+    expect((await auth()).status).toBe(405)
+    await visitor.goto(appsPage)
+    await visitor.getByRole('alert').filter({ hasText: '仅员工账户' }).waitFor()
+    expect(await visitor.getByRole('button', { name: '注册应用' }).count()).toBe(0)
+
+    await page.reload()
+    await row.getByText('1 个有效 Token').waitFor()
+    await page.emulateMedia({ colorScheme: 'dark' })
+    await expectMode(page, 'dark')
+    await page.setViewportSize({ width: 390, height: 844 })
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390)
+    // The real ID was checked above. Use a fixed display value for pixel snapshots:
+    // random glyphs near the wrapping point otherwise change the sampled cells.
+    await row.getByText(clientId, { exact: true }).evaluate((code) => {
+      code.textContent = 'zxa_JsUYwThWqS5r2VSe5mACQx9lsGw9qhXDG6zDKSlSFdc'
+    })
+    await screenshot(page, 'oauth-app-mobile-dark')
+    const clear = row.getByRole('button', { name: '清除 Token' })
+    await clear.press('Enter')
+    await page.getByRole('dialog', { name: '清除授权 Token' }).waitFor()
+    await screenshot(page, 'oauth-clear-confirmation-mobile-dark')
+    await page.keyboard.press('Escape')
+    await page.getByRole('dialog').waitFor({ state: 'hidden' })
+    expect(await clear.evaluate((button) => document.activeElement === button)).toBe(true)
+    expect((await auth()).status).toBe(405)
+    await clear.click()
+    await page.getByRole('button', { name: '确认清除' }).click()
+    await row.getByText('0 个有效 Token').waitFor()
+    expect((await auth()).status).toBe(401)
+    await row.getByRole('button', { name: '取消注册' }).click()
+    await page.getByRole('button', { name: '确认取消注册' }).click()
+    await row.waitFor({ state: 'detached' })
+    await page.reload()
+    await page.getByRole('heading', { name: '还没有注册应用' }).waitFor()
+  } finally {
+    await visitor.close()
+    await page.close()
+    vi.unstubAllGlobals()
   }
 })
 
