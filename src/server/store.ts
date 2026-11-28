@@ -70,6 +70,15 @@ export function openStore(path: string) {
     CREATE TABLE IF NOT EXISTS publish_repositories (
       id TEXT NOT NULL PRIMARY KEY, repository TEXT NOT NULL UNIQUE
     );
+    CREATE TABLE IF NOT EXISTS mcp_grants (
+      flow_id TEXT NOT NULL PRIMARY KEY,
+      credential_hash TEXT UNIQUE,
+      session_hash TEXT NOT NULL REFERENCES sessions(hash) ON DELETE CASCADE,
+      client_hash TEXT NOT NULL, resource TEXT NOT NULL, redirect_uri TEXT NOT NULL,
+      code_challenge TEXT, expires INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS mcp_grants_session ON mcp_grants(session_hash);
+    CREATE INDEX IF NOT EXISTS mcp_grants_expiry ON mcp_grants(expires);
   `)
   return db
 }

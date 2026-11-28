@@ -4,6 +4,7 @@ import { acceptsHost } from './deployment.mjs'
 import { api } from './server/api'
 import { config } from './server/config'
 import { documentDiscovery } from './server/documents'
+import { mcpMetadata } from './server/mcp-auth'
 
 const render = createStartHandler(defaultStreamHandler)
 
@@ -15,6 +16,8 @@ export default createServerEntry({
       return new Response('Unauthorized deployment host', { status: 421 })
     }
     if (url.pathname.startsWith('/api/')) return api(request, url.pathname)
+    const metadata = mcpMetadata(request, url.pathname, origin)
+    if (metadata) return metadata
     if (url.pathname === '/robots.txt')
       return new Response(
         `User-agent: *\nDisallow: /api/\nDisallow: /account\nDisallow: /admin\nSitemap: ${origin}/sitemap.xml\n`,
@@ -26,6 +29,12 @@ export default createServerEntry({
     if (/^\/(?:account|admin)\/?$/.test(url.pathname)) {
       response.headers.set('X-Robots-Tag', 'noindex')
       response.headers.set('Cache-Control', 'private, no-store')
+    }
+    if (/^\/login\/?$/.test(url.pathname) && url.searchParams.get('mcp') === 'true') {
+      response.headers.set('X-Robots-Tag', 'noindex')
+      response.headers.set('Cache-Control', 'private, no-store')
+      response.headers.set('Content-Security-Policy', "frame-ancestors 'none'")
+      response.headers.set('Referrer-Policy', 'same-origin')
     }
     return response
   },

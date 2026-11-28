@@ -44,6 +44,18 @@ export async function readJson(request: Request, max: number): Promise<Record<st
   ) {
     throw new HttpError(415, '请求必须使用 JSON。')
   }
+  try {
+    const result: unknown = JSON.parse(await readBody(request, max))
+    if (typeof result === 'object' && result !== null && !Array.isArray(result)) {
+      return result as Record<string, unknown>
+    }
+  } catch (error) {
+    if (error instanceof HttpError) throw error
+  }
+  throw new HttpError(400, '请求内容不是有效的 JSON 对象。')
+}
+
+export async function readBody(request: Request, max: number) {
   if (!request.body || Number(request.headers.get('content-length')) > max) {
     throw new HttpError(413, '请求内容超出限制。')
   }
@@ -62,17 +74,14 @@ export async function readJson(request: Request, max: number): Promise<Record<st
       }
       pieces.push(decoder.decode(value, { stream: true }))
     }
-    const result: unknown = JSON.parse(pieces.join('') + decoder.decode())
-    if (typeof result === 'object' && result !== null && !Array.isArray(result)) {
-      return result as Record<string, unknown>
-    }
+    return pieces.join('') + decoder.decode()
   } catch (error) {
     if (error instanceof HttpError) throw error
     void reader.cancel().catch(() => {})
+    throw new HttpError(400, '无法读取请求内容。')
   } finally {
     reader.releaseLock()
   }
-  throw new HttpError(400, '请求内容不是有效的 JSON 对象。')
 }
 
 export function json(data: unknown, status = 200, cookies: string[] = []) {

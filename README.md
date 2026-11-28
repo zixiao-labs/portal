@@ -4,7 +4,19 @@
 - `/account`：个人中心与 API 不索引。员工用工作邮箱登录后，可绑定自己的 GitHub 账号；之后可用同一个 GitHub 账号登录，门户中的工作邮箱和员工身份不会改变。不会按邮箱自动合并账户，也不会覆盖已有绑定。
 - `/admin`：管理后台。管理员可搜索、停用、恢复用户，结束其会话，以及授权或撤销多个组织仓库的文档发布权限。必须验证工作邮箱才能进入后台和签发有效期 30 分钟的 [CLI 用户管理凭据](docs/cli-user-management.md)；通过 GitHub 登录的管理员可从个人中心直接发起验证，无需退出登录。
 - `/docs`：公开 SSR 文档库。首次发布后，仓库拥有 `/docs/<repo>` 首页和 `/docs/<repo>/llms.txt` 索引，可作为 Context7 的公开文档来源。提交仅接受获授权仓库的 GitHub Actions 短期 OIDC 凭据，不接受浏览器会话、CLI Token 或 PAT。[Portal 文档源码](docs/overview.md)也通过同一工作流发布。
+- `/api/mcp`：通过 Streamable HTTP 和 OAuth 为可发布仓库注册或撤销权限。仅经工作邮箱验证的管理员可批准连接；MCP 凭据不能上传文档，也不能管理用户。见 [MCP 使用指南](docs/mcp.md)。
 - 页脚「外观」支持 UI Kit 的全部内置配色和组件风格，默认是 **紫霄配色 + 鹤坡 + 跟随系统**。可手动选择浅色或深色，浏览器会记住偏好。
+
+## Agent Skills
+
+在 skills CLI 中列出此仓库的 Skills，或安装 MCP 用法与文档发布设置：
+
+```sh
+npx skills add zixiao-labs/portal --list
+npx skills add zixiao-labs/portal --skill portal-mcp --skill portal-docs-publishing
+```
+
+源码位于 [`.agents/skills`](.agents/skills/)，也供 skills.sh 从公开仓库发现。榜单受 skills.sh 的安装统计影响。安装 Skills 不会授权仓库或自动发布文档。
 
 ## 本地工具链
 
@@ -74,6 +86,8 @@ Nasti 2.11 的 Start 热更新暂时关闭；源文件变化后重新加载浏�
 
 JWT 沿用 `PORTAL_SECRET` 派生签名密钥，GitHub 绑定沿用现有 OAuth App 及回调地址；文档发布也不需要新建 Secret。镜像的 SSH 发布与文档的 OIDC 发布是两条链路，保留现有 SSH、OAuth 和 SMTP 配置。
 
+MCP OAuth 复用管理员工作邮箱登录和现有 `PORTAL_SECRET`，不需要新建 GitHub OAuth App 或添加 Secret。升级启动时会自动新增 `mcp_grants` 表，不改变现有仓库发布授权。
+
 上线后检查 `curl -I http://zixiaolabs.com/`（跳转 HTTPS）、`curl -i https://zixiaolabs.com/`（`301` 到 `/login`）、`https://zixiaolabs.com/sitemap.xml`，并实测 GitHub 登录、邮箱验证码与文档发布。SQLite 保存在 `zixiao-portal-data` 命名卷；请定期做 SQLite `.backup` 或停机备份，不要删卷或只拷贝活动数据库主文件。若已有部署使用其他位置的数据库，**先备份并迁移到该卷，再启用 CD**。单实例替换会有短暂中断；若主机宕机等中断留下 `zixiao-portal-previous`，先用 `docker ps -a` 确认当前容器状态，恢复或清理旧容器后再发布。定期检查磁盘并清理不再使用的旧镜像。
 
 #### 从旧版升级
@@ -111,7 +125,7 @@ JWT 沿用 `PORTAL_SECRET` 派生签名密钥，GitHub 绑定沿用现有 OAuth 
 
 ### GitHub Actions：组织内文档发布
 
-1. **在门户授权仓库。** 管理员用工作邮箱登录，打开 **个人中心 → 管理后台 → 可发布仓库**，填 GitHub 仓库全名和数字 ID。用 `gh api repos/zixiao-labs/<repo> --jq .id` 查询 ID（私有仓库需有查询权限）。可同时授权多个仓库；新授权和撤销立即生效，不需要部署。门户根据 GitHub 签名的仓库名称和 ID 比对授权，不需要 PAT 或读取私有仓库的凭据。
+1. **在门户授权仓库。** 管理员用工作邮箱登录，打开 **个人中心 → 管理后台 → 可发布仓库**，或使用 [MCP](docs/mcp.md)；两者操作同一份授权记录。用 `gh api repos/zixiao-labs/<repo> --jq .id` 查询数字 ID（私有仓库需有查询权限）。新授权和撤销立即生效，不需要部署。门户根据 GitHub 签名的仓库名称和 ID 比对授权，不需要 PAT 或读取私有仓库的凭据。
 2. **在各内容仓库接入 Action。** 把 [工作流模板](.github/workflows/publish-docs.yml) 原名放在 `.github/workflows/`。选择以下一种安装方式；两种调用的是同一个可移植的 [Composite Action](.github/actions/publish-docs/action.yml)：
    - **复制到获授权的组织仓库：** 把 [`.github/actions/publish-docs/`](.github/actions/publish-docs/) 一并复制到内容仓库，模板无需改动。复制到公开仓库前，请按 [License](License) 取得公开分发许可。
    - **集中引用：** 将模板中的本地 Action 引用替换为 `uses: zixiao-labs/portal/.github/actions/publish-docs@<已审核的完整提交 SHA>`。调用方必须允许该 Action；如果门户仓库是私有的，还需在门户仓库 **Settings → Actions → General → Access** 中授权组织内的私有仓库访问。公开仓库不能直接引用私有 Action。
