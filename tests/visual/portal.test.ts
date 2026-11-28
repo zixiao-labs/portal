@@ -331,6 +331,48 @@ test('the site root redirects permanently to the canonical login page', async ()
   expect(await login.text()).toContain('href="https://zixiaolabs.com/login"')
 })
 
+test('the login route redirects active sessions before rendering', async () => {
+  for (const [path, cookie] of [
+    ['/login', githubAdminSession],
+    ['/login?error=github', githubAdminSession],
+    ['/login?verifyEmail=true', adminSession],
+  ]) {
+    const response = await fetch(`${origin}${path}`, { redirect: 'manual', headers: { cookie } })
+    expect(response.status).toBe(302)
+    expect(new URL(response.headers.get('location')!, origin).href).toBe(`${origin}/account`)
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
+  }
+
+  const guest = await fetch(`${origin}/login`, { headers: { cookie: 'portal_session=invalid' } })
+  expect(guest.status).toBe(200)
+  expect(guest.headers.get('cache-control')).toBe('private, no-store')
+  expect(await guest.text()).toContain('登录门户')
+})
+
+test('the login route rechecks the session on client-side navigation', async () => {
+  const page = await browser!.newPage()
+  try {
+    await page.goto(`${origin}/login`)
+    const timeOrigin = await page.evaluate(() => performance.timeOrigin)
+    await page.getByRole('link', { name: '浏览公开文档' }).click()
+    await page.waitForURL(`${origin}/docs`)
+    await page.context().addCookies([
+      {
+        name: 'portal_session',
+        value: githubAdminSession.split('=')[1],
+        url: origin,
+        httpOnly: true,
+      },
+    ])
+    await page.goBack()
+    await page.waitForURL(`${origin}/account`)
+    await page.getByText(admin.email, { exact: true }).waitFor()
+    expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin)
+  } finally {
+    await page.close()
+  }
+})
+
 test('the header logo opens login for guests and the account for signed-in users', async () => {
   const page = await browser!.newPage()
   const logo = page.getByRole('banner').getByRole('link', { name: /紫霄实验室/ })
@@ -509,7 +551,7 @@ test('a GitHub-signed-in admin keeps the role and can verify their work email wi
     await screenshot(page, 'account-admin-verification-desktop')
 
     await verify.click()
-    await page.waitForURL('**/login#work-email')
+    await page.waitForURL(`${origin}/login?verifyEmail=true#work-email`)
     await page.getByLabel('工作邮箱').fill(admin.email)
     await page.getByRole('button', { name: '发送验证码' }).click()
     const input = page.getByLabel('验证码')

@@ -26,13 +26,15 @@ export default createServerEntry({
     const discovery = documentDiscovery(request, url.pathname, origin)
     if (discovery) return discovery
     const response = await render(request, options)
-    if (/^\/(?:account|admin)\/?$/.test(url.pathname)) {
+    const privateArea = /^\/(?:account|admin)\/?$/.test(url.pathname)
+    const login = /^\/login\/?$/.test(url.pathname)
+    const mcpLogin = login && url.searchParams.get('mcp') === 'true'
+    const emailVerification = login && url.searchParams.get('verifyEmail') === 'true'
+    if (privateArea || login) response.headers.set('Cache-Control', 'private, no-store')
+    if (privateArea || mcpLogin || emailVerification) {
       response.headers.set('X-Robots-Tag', 'noindex')
-      response.headers.set('Cache-Control', 'private, no-store')
     }
-    if (/^\/login\/?$/.test(url.pathname) && url.searchParams.get('mcp') === 'true') {
-      response.headers.set('X-Robots-Tag', 'noindex')
-      response.headers.set('Cache-Control', 'private, no-store')
+    if (mcpLogin) {
       response.headers.set('Content-Security-Policy', "frame-ancestors 'none'")
       response.headers.set('Referrer-Policy', 'same-origin')
     }
