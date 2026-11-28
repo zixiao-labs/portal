@@ -5,7 +5,13 @@ import sirv from 'sirv'
 import { acceptsHost } from '../src/deployment.mjs'
 
 export function servePortal(handler, { origin, assets }) {
-  const staticFiles = sirv(assets, { etag: true })
+  const staticFiles = sirv(assets, {
+    etag: true,
+    setHeaders(res, pathname) {
+      if (pathname === '/sw.js' || pathname === '/manifest.webmanifest')
+        res.setHeader('Cache-Control', 'no-cache')
+    },
+  })
   return createServer((req, res) => {
     if (!acceptsHost(req.headers.host, origin)) {
       res.writeHead(421).end('Unauthorized deployment host')

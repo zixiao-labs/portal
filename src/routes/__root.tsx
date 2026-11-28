@@ -1,5 +1,5 @@
 import { HeadContent, Link, Outlet, Scripts, createRootRoute } from '@tanstack/react-router'
-import type { ReactNode } from 'react'
+import { useEffect, type ReactNode } from 'react'
 import '@zixiao-labs/ui-kits-react/styles.css'
 import '../portal.css'
 import logo from '../../assets/zixiao-logo-2.svg?url'
@@ -13,7 +13,11 @@ export const Route = createRootRoute({
       { name: 'viewport', content: 'width=device-width, initial-scale=1' },
       { title: '紫霄实验室 · Zixiao Laboratories' },
     ],
-    links: [{ rel: 'icon', type: 'image/svg+xml', href: logo }],
+    links: [
+      { rel: 'icon', type: 'image/svg+xml', href: logo },
+      { rel: 'manifest', href: '/manifest.webmanifest' },
+      { rel: 'apple-touch-icon', sizes: '192x192', href: '/pwa/icon-192.png' },
+    ],
   }),
   shellComponent: RootDocument,
   component: Outlet,
@@ -34,6 +38,14 @@ export const Route = createRootRoute({
 })
 
 function RootDocument({ children }: { children: ReactNode }) {
+  useEffect(() => {
+    // Don't let a worker intercept requests while Nasti is rebuilding the dev server.
+    if (!import.meta.env.PROD || !('serviceWorker' in navigator)) return
+    navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' }).catch((error) => {
+      console.warn('Portal service worker registration failed:', error)
+    })
+  }, [])
+
   return (
     // The head script sets the actual theme attributes before React hydrates.
     <html
