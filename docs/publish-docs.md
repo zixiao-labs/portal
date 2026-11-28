@@ -4,7 +4,7 @@ Authorized repositories in the `zixiao-labs` GitHub organization can publish a c
 
 ## Configure repository access
 
-1. Find the numeric repository ID with `gh api repos/zixiao-labs/example --jq .id`. Ask a portal administrator to grant publishing access for that ID and the full repository name.
+1. Find the numeric repository ID with `gh api repos/zixiao-labs/example --jq .id`. Ask a Portal administrator to grant access for that ID and the full name in `/admin` or via [MCP](https://zixiaolabs.com/docs/portal/mcp).
 2. Install the portal's `publish-docs` composite Action and its caller workflow at `.github/workflows/publish-docs.yml`. See the [GitHub workflow template](https://github.com/zixiao-labs/portal/blob/main/.github/workflows/publish-docs.yml).
 3. Configure the GitHub Actions environment `docs-publish` to allow deployments from `main` only, with required reviewers where supported. Protect `main` and review changes to the docs and publishing workflow. The repository variable `PORTAL_DOCS_ENABLED` must be `true`.
 4. Give the publishing job `contents: read` and `id-token: write`. The GitHub job is the publisher; neither a personal access token nor a portal CLI token is accepted.

@@ -3,8 +3,10 @@ import { canonicalOrigin } from '../deployment.mjs'
 import { LoginPage } from '../ui/login'
 
 export const Route = createFileRoute('/login')({
-  validateSearch: (search): { error?: string } =>
-    typeof search.error === 'string' ? { error: search.error } : {},
+  validateSearch: (search): { error?: string; mcp?: true } => ({
+    ...(typeof search.error === 'string' ? { error: search.error } : {}),
+    ...(search.mcp === true ? { mcp: true } : {}),
+  }),
   head: () => ({
     meta: [
       { title: '登录｜紫霄实验室 Zixiao Laboratories' },
@@ -19,5 +21,6 @@ export const Route = createFileRoute('/login')({
 })
 
 function LoginRoute() {
-  return <LoginPage oauthError={Route.useSearch().error} />
+  const { error, mcp } = Route.useSearch()
+  return <LoginPage key={mcp ? 'mcp' : 'login'} oauthError={error} mcp={mcp} />
 }

@@ -9,6 +9,8 @@ export default defineConfig({
           // Keep the test registry shared with the runner and let Node load CommonJS packages.
           external: [
             '@lightning-js/lightning',
+            /^@modelcontextprotocol\/sdk\//,
+            'zod',
             'playwright',
             'pngjs',
             'sirv',

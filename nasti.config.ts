@@ -11,6 +11,7 @@ export default defineConfig({
       build: {
         rolldownOptions: {
           external: [
+            /^@modelcontextprotocol\/sdk\//,
             'jose',
             'nodemailer',
             'rehype-parse',
@@ -22,6 +23,7 @@ export default defineConfig({
             'remark-parse',
             'remark-rehype',
             'unified',
+            'zod',
           ],
         },
       },

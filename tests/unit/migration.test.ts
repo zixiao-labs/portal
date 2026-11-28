@@ -52,6 +52,7 @@ test('opening a pre-JWT database adds OAuth flow storage without replacing exist
       expect(db.prepare('SELECT count(*) AS count FROM employee_github_links').get()?.count).toBe(0)
       expect(db.prepare('SELECT count(*) AS count FROM suspended_users').get()?.count).toBe(0)
       expect(db.prepare('SELECT count(*) AS count FROM publish_repositories').get()?.count).toBe(0)
+      expect(db.prepare('SELECT count(*) AS count FROM mcp_grants').get()?.count).toBe(0)
     }
     // Startup is idempotent. Rollback also still has the old table and data.
     using db = openStore(path)

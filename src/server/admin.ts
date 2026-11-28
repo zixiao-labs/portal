@@ -1,14 +1,15 @@
 import { createHmac } from 'node:crypto'
 import type { AccountInfo } from '../account-info'
-import { adminEmails, organizationRepository, validNumericId } from '../deployment.mjs'
+import { adminEmails, validNumericId } from '../deployment.mjs'
 import { config } from './config'
 import { HttpError, json, opaque, readJson } from './http'
+import { registerRepository, unregisterRepository } from './repositories'
 import { activeSession, session } from './session'
 import { store, transaction, type User } from './store'
 
 type Session = NonNullable<Awaited<ReturnType<typeof session>>>
 
-function isConfiguredAdmin(user: User) {
+export function isConfiguredAdmin(user: Pick<User, 'email' | 'employee'>) {
   return Boolean(user.employee) && adminEmails(process.env.PORTAL_ADMIN_EMAILS).has(user.email)
 }
 
@@ -153,25 +154,15 @@ export async function adminApi(request: Request, path: string) {
   }
   if (path === '/api/admin/repositories' && method === 'POST') {
     const body = await readJson(request, 4096)
-    const repository = organizationRepository(
-      typeof body.repository === 'string' ? body.repository.trim() : undefined,
-    )
-    const id = typeof body.id === 'string' ? body.id.trim() : undefined
-    if (!repository || !validNumericId(id))
-      throw new HttpError(400, '请输入 zixiao-labs 组织下的仓库全名和数字 ID。')
     return write(() => {
-      const result = db
-        .prepare('INSERT OR IGNORE INTO publish_repositories VALUES (?, ?)')
-        .run(id, repository)
-      if (!result.changes)
-        throw new HttpError(409, '该仓库名称或 ID 已获授权。若要更改，请先撤销原授权。')
+      registerRepository(body)
     })
   }
 
   const repositoryId = method === 'DELETE' && /^\/api\/admin\/repositories\/(\d+)$/.exec(path)?.[1]
   if (validNumericId(repositoryId)) {
     return write(() => {
-      db.prepare('DELETE FROM publish_repositories WHERE id=?').run(repositoryId)
+      unregisterRepository(repositoryId)
     })
   }
   throw new HttpError(404, '未找到接口。')

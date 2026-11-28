@@ -8,6 +8,7 @@ import nodemailer, { type SendMailOptions } from 'nodemailer'
 import { chromium, type Browser, type Page } from 'playwright'
 import { PNG } from 'pngjs'
 import { servePortal } from '../../scripts/http.mjs'
+import { hash, opaque } from '../../src/server/http'
 import { renderArticle, replaceCollection } from '../../src/server/publish'
 import { newSession } from '../../src/server/session'
 import { openStore } from '../../src/server/store'
@@ -522,6 +523,89 @@ test('a GitHub-signed-in admin keeps the role and can verify their work email wi
     expect(
       (await fetch(`${origin}/api/account`, { headers: { cookie: githubAdminSession } })).status,
     ).toBe(401)
+  } finally {
+    await page.close()
+    mail.mockRestore()
+    vi.unstubAllEnvs()
+  }
+})
+
+test('MCP authorization returns to the client after work-email verification and consent', async () => {
+  const page = await browser!.newPage({
+    viewport: { width: 390, height: 844 },
+    colorScheme: 'light',
+    reducedMotion: 'reduce',
+  })
+  const oauth = `${origin}/api/mcp/oauth`
+  const callback = `${origin}/docs`
+  let code: string | undefined
+  const mail = vi.spyOn(nodemailer, 'createTransport').mockReturnValue({
+    async sendMail(message: SendMailOptions) {
+      expect(message.to).toBe(admin.email)
+      code = String(message.text).match(/\d{6}/)?.[0]
+    },
+  })
+  vi.stubEnv('SMTP_HOST', 'smtp.example.org')
+  vi.stubEnv('SMTP_USER', 'portal@example.org')
+  vi.stubEnv('SMTP_PASSWORD', 'fake-browser-test-password')
+  try {
+    const metadata = await fetch(`${origin}/.well-known/oauth-protected-resource/api/mcp`)
+    expect(await metadata.json()).toMatchObject({
+      resource: `${origin}/api/mcp`,
+      authorization_servers: [origin],
+    })
+    const registration = await fetch(`${oauth}/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ redirect_uris: [callback], token_endpoint_auth_method: 'none' }),
+    })
+    expect(registration.status).toBe(201)
+    const { client_id } = await registration.json()
+    const verifier = opaque()
+    const state = opaque()
+    const login = await page.goto(
+      `${oauth}/authorize?${new URLSearchParams({
+        client_id,
+        redirect_uri: callback,
+        response_type: 'code',
+        code_challenge: hash(verifier),
+        code_challenge_method: 'S256',
+        resource: `${origin}/api/mcp`,
+        state,
+      })}`,
+    )
+    expect(login?.headers()['x-robots-tag']).toBe('noindex')
+    const email = page.getByLabel('工作邮箱')
+    await email.fill(admin.email)
+    await page.getByRole('button', { name: '发送验证码' }).click()
+    const input = page.getByLabel('验证码')
+    await input.waitFor()
+    expect(code).toMatch(/^\d{6}$/)
+    await input.fill(code!)
+    await page.getByRole('button', { name: '验证并登录' }).click()
+
+    const approve = page.getByRole('button', { name: '允许管理发布权限' })
+    await approve.waitFor()
+    expect(page.url()).toBe(`${origin}/login?mcp=true`)
+    expect(await page.getByText(callback, { exact: true }).count()).toBe(1)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390)
+    await screenshot(page, 'mcp-consent-mobile')
+    await approve.click()
+    await page.waitForURL((url) => url.pathname === '/docs' && url.searchParams.has('code'))
+    const returned = new URL(page.url())
+    expect(returned.searchParams.get('state')).toBe(state)
+    const exchange = await fetch(`${oauth}/token`, {
+      method: 'POST',
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        client_id,
+        redirect_uri: callback,
+        code: returned.searchParams.get('code')!,
+        code_verifier: verifier,
+        resource: `${origin}/api/mcp`,
+      }),
+    })
+    expect(exchange.status).toBe(200)
   } finally {
     await page.close()
     mail.mockRestore()
