@@ -6,6 +6,7 @@
 - `/docs`：公开 SSR 文档库。首次发布后，仓库拥有 `/docs/<repo>` 首页和 `/docs/<repo>/llms.txt` 索引，可作为 Context7 的公开文档来源。提交仅接受获授权仓库的 GitHub Actions 短期 OIDC 凭据，不接受浏览器会话、CLI Token 或 PAT。[Portal 文档源码](docs/overview.md)也通过同一工作流发布。
 - `/api/mcp`：与「个人中心 → OAuth 应用」共用第三方 OAuth。员工可以注册应用、清除 Token 或取消注册；任何已登录用户可用 `docs:read` 查询公开文档。仓库发布授权仍由工作邮箱验证的管理员管理。见 [OAuth 和 MCP 指南](docs/mcp.md)。
 - 页脚「外观」支持 UI Kit 的全部内置配色和组件风格，默认是 **紫霄配色 + 鹤坡 + 跟随系统**。可手动选择浅色或深色，浏览器会记住偏好。
+- **PWA**：通过 HTTPS 打开门户，在 Chrome 或 Edge 菜单中选择安装；在 iOS Safari 中通过「分享 → 添加到主屏幕」安装。应用以独立窗口打开 `/login`。断网时可查看重试提示；登录和文档仍需联网，Service Worker 不缓存门户页面或 API 响应。
 
 ## Agent Skills
 
@@ -37,6 +38,8 @@ pnpm test:visual # 需要 Docker；在与 CI 相同的 Linux/amd64 容器中构�
 ```
 
 Nasti 2.11 的 Start 热更新暂时关闭；源文件变化后重新加载浏览器即可。视觉测试统一使用容器中的 Chromium 和字体，避免不同系统的渲染差异影响基线。原图写到 `artifacts/`；有意修改界面时，先检查原图，再运行 `pnpm test:visual --update` 更新基线。
+
+`pnpm dev` 不注册 Service Worker，避免干扰重新构建；`pnpm test:visual` 会用生产构建检查 PWA 安装条件、断网提示和恢复联网后的重试。
 
 开发无需凭据即可查看登录页面和空文档库。若要连调 GitHub，单独注册一个回调为 `http://localhost:3000/api/auth/github/callback` 的 OAuth App。不要复制生产 OAuth 密钥到本地。使用 `.env.example` 作为配置参考；不测试邮件时将 SMTP 参数全部留空。
 

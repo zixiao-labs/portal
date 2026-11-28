@@ -148,7 +148,13 @@ async function screenshot(page: Page, name: string) {
       fullPage: false,
     }),
   )
-  const darkMode = (await page.locator('html').getAttribute('data-zx-color-mode')) === 'dark'
+  const darkMode = await page.evaluate(() => {
+    const scheme = getComputedStyle(document.documentElement).colorScheme
+    return (
+      scheme === 'dark' ||
+      (scheme.includes('dark') && matchMedia('(prefers-color-scheme: dark)').matches)
+    )
+  })
   const rows = []
   for (let y = 0; y < 18; y++) {
     let row = ''
@@ -332,6 +338,91 @@ test('the site root redirects permanently to the canonical login page', async ()
   const login = await fetch(`${origin}/login`)
   expect(login.status).toBe(200)
   expect(await login.text()).toContain('href="https://zixiaolabs.com/login"')
+})
+
+test('the production build serves the install manifest and actual app icons', async () => {
+  const login = await fetch(`${origin}/login`)
+  const html = await login.text()
+  expect(html).toContain('rel="manifest" href="/manifest.webmanifest"')
+  expect(html).toContain('href="/pwa/icon-192.png"')
+  const response = await fetch(`${origin}/manifest.webmanifest`)
+  expect(response.status).toBe(200)
+  expect(response.headers.get('content-type')).toBe('application/manifest+json')
+  expect(response.headers.get('cache-control')).toBe('no-cache')
+  const manifest = await response.json()
+  expect(manifest).toMatchObject({
+    id: '/',
+    start_url: '/login',
+    scope: '/',
+    display: 'standalone',
+  })
+  expect(manifest.icons).toEqual([
+    { src: '/pwa/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+    { src: '/pwa/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+    { src: '/pwa/icon-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+  ])
+  for (const { src, sizes } of manifest.icons) {
+    const icon = await fetch(`${origin}${src}`)
+    expect(icon.status).toBe(200)
+    expect(icon.headers.get('content-type')).toBe('image/png')
+    const { width, height } = PNG.sync.read(Buffer.from(await icon.arrayBuffer()))
+    expect(`${width}x${height}`).toBe(sizes)
+  }
+  const worker = await fetch(`${origin}/sw.js`)
+  expect(worker.status).toBe(200)
+  expect(worker.headers.get('content-type')).toMatch(/javascript/)
+  expect(worker.headers.get('cache-control')).toBe('no-cache')
+})
+
+test('the installed worker preserves online routing and shows a retry page without caching account data', async () => {
+  const page = await browser!.newPage({
+    viewport: { width: 390, height: 844 },
+    colorScheme: 'dark',
+  })
+  const context = page.context()
+  try {
+    await page.goto(`${origin}/login`)
+    await page.waitForFunction(() => !!navigator.serviceWorker.controller)
+    expect(await page.evaluate(() => navigator.serviceWorker.controller?.scriptURL)).toBe(
+      `${origin}/sw.js`,
+    )
+    const cdp = await context.newCDPSession(page)
+    const { installabilityErrors } = await cdp.send('Page.getInstallabilityErrors')
+    expect(installabilityErrors).toEqual([])
+
+    const missing = await page.goto(`${origin}/docs/missing`)
+    expect(missing?.fromServiceWorker()).toBe(true)
+    expect(missing?.status()).toBe(404)
+    await page.goto(origin)
+    expect(page.url()).toBe(`${origin}/login`)
+
+    await context.addCookies([
+      { name: 'portal_session', value: session.split('=')[1], url: origin, httpOnly: true },
+    ])
+    await page.goto(`${origin}/account`)
+    await page.getByText('employee@zixiaolabs.com', { exact: true }).waitFor()
+    expect(await page.evaluate(() => caches.keys())).toEqual([])
+
+    await context.setOffline(true)
+    const fallback = await page.reload()
+    expect(fallback?.fromServiceWorker()).toBe(true)
+    expect(fallback?.status()).toBe(503)
+    expect(fallback?.headers()['cache-control']).toBe('no-store')
+    await page.getByRole('heading', { name: '暂时无法连接门户' }).waitFor()
+    expect(await page.getByText('employee@zixiaolabs.com').count()).toBe(0)
+    expect(await page.evaluate(() => fetch('/api/account').catch(() => 'offline'))).toBe('offline')
+    const retry = page.getByRole('link', { name: '重新加载页面' })
+    expect((await retry.boundingBox())?.height).toBeGreaterThanOrEqual(44)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390)
+    await screenshot(page, 'pwa-offline-mobile')
+
+    await context.setOffline(false)
+    await retry.click()
+    await page.getByText('employee@zixiaolabs.com', { exact: true }).waitFor()
+    expect(page.url()).toBe(`${origin}/account`)
+  } finally {
+    await page.close()
+  }
 })
 
 test('the login route redirects active sessions before rendering', async () => {

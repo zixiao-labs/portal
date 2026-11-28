@@ -14,8 +14,8 @@
     "start": "node --env-file-if-exists=.env scripts/start.mjs",
     "smtp:check": "node --env-file-if-exists=.env scripts/check-smtp.mjs",
     "typecheck": "tsc --noEmit",
-    "lint": "oxlint src scripts tests",
-    "format": "oxfmt src scripts tests nasti.config.ts lightning.config.ts",
+    "lint": "oxlint src scripts tests public",
+    "format": "oxfmt src scripts tests public nasti.config.ts lightning.config.ts",
     "test": "lightning run --project unit",
     "test:action": "python3 -B -m unittest discover -s tests/action -p '*_test.py'",
     "test:visual": "sh scripts/test-visual.sh"
