@@ -2,10 +2,10 @@ import { afterAll, beforeAll, expect, test, vi } from '@lightning-js/lightning'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
-import type {
-  OAuthClientInformationMixed,
-  OAuthTokens,
-} from '@modelcontextprotocol/sdk/shared/auth.js'
+import type { OAuthTokens } from '@modelcontextprotocol/sdk/shared/auth.js'
+import { decodeJwt, jwtVerify, SignJWT } from 'jose'
+import { createHmac } from 'node:crypto'
+import { oauthAppsPath, type OAuthApp, type OAuthScope } from '../../src/oauth-app-info'
 import { api } from '../../src/server/api'
 import { verifiedEmailUser } from '../../src/server/auth'
 import { hash, opaque } from '../../src/server/http'
@@ -21,9 +21,9 @@ const scope = 'docs:repositories'
 const adminEmail = 'mcp-admin@zixiaolabs.com'
 const testSecret = 'fake-mcp-test-secret'
 const bearer = (token: string) => ({ Authorization: `Bearer ${token}` })
-const jsonBody = (body: object) => ({
+const jsonBody = (body: object, cookie = '') => ({
   method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
+  headers: { 'Content-Type': 'application/json', origin, cookie },
   body: JSON.stringify(body),
 })
 const form = (body: Record<string, string>, headers?: HeadersInit) => ({
@@ -60,16 +60,18 @@ function cookieFrom(response: Response) {
   return response.headers.get('set-cookie')!.split(';')[0]
 }
 
-async function startFlow(overrides: Record<string, string> = {}) {
+async function registerApp(cookie: string, appScope: OAuthScope = scope) {
   const registration = await request(
-    `${oauth}/register`,
-    jsonBody({
-      redirect_uris: [callback],
-      token_endpoint_auth_method: 'none',
-    }),
+    oauthAppsPath,
+    jsonBody({ name: 'Handbook client', redirectUris: [callback], scope: appScope }, cookie),
   )
   expect(registration.status).toBe(201)
-  const { client_id } = await registration.json()
+  return (await registration.json()) as OAuthApp
+}
+
+async function startFlow(overrides: Record<string, string> = {}, app?: OAuthApp) {
+  app ??= await registerApp(await browserSession(adminEmail))
+  const client_id = app.clientId
   const verifier = opaque()
   const pending = await request(
     `${oauth}/authorize?${new URLSearchParams({
@@ -79,7 +81,7 @@ async function startFlow(overrides: Record<string, string> = {}) {
       code_challenge_method: 'S256',
       code_challenge: hash(verifier),
       resource,
-      scope,
+      scope: app.scope,
       state: 'client-state',
       ...overrides,
     })}`,
@@ -104,7 +106,11 @@ async function approve(pending: Response, sessionCookie: string, decision = 'app
 }
 
 test('a real MCP SDK client discovers OAuth and manages the same grants as the admin API', async () => {
-  let registered: OAuthClientInformationMixed | undefined
+  const cookie = await browserSession(adminEmail)
+  const registered = {
+    client_id: (await registerApp(cookie)).clientId,
+    issuer: origin,
+  }
   let tokens: OAuthTokens | undefined
   let authorizationUrl: URL | undefined
   let verifier = ''
@@ -112,9 +118,6 @@ test('a real MCP SDK client discovers OAuth and manages the same grants as the a
     redirectUrl: callback,
     clientMetadata: { redirect_uris: [callback], token_endpoint_auth_method: 'none' },
     clientInformation: () => registered,
-    saveClientInformation: (value) => {
-      registered = value
-    },
     tokens: () => tokens,
     saveTokens: (value) => {
       tokens = value
@@ -137,7 +140,6 @@ test('a real MCP SDK client discovers OAuth and manages the same grants as the a
   expect(registered).toBeDefined()
   expect(authorizationUrl?.pathname).toBe(`${oauth}/authorize`)
   expect(authorizationUrl?.searchParams.get('resource')).toBe(resource)
-  const cookie = await browserSession(adminEmail)
   const params = await approve(await request(authorizationUrl!), cookie)
   await transport.finishAuth(params.get('code')!)
   expect(tokens).toMatchObject({
@@ -162,7 +164,12 @@ test('a real MCP SDK client discovers OAuth and manages the same grants as the a
   try {
     const register = 'register_publish_repository'
     const unregister = 'unregister_publish_repository'
-    expect((await client.listTools()).tools.map(({ name }) => name)).toEqual([register, unregister])
+    expect((await client.listTools()).tools.map(({ name }) => name)).toEqual([
+      'search_documents',
+      'get_document',
+      register,
+      unregister,
+    ])
     const repository = { id: '123456', repository: 'zixiao-labs/Handbook' }
     expect(
       await client.callTool({
@@ -217,7 +224,7 @@ test('a real MCP SDK client discovers OAuth and manages the same grants as the a
       (
         await request(
           `${oauth}/revoke`,
-          form({ token: tokens!.access_token, client_id: registered!.client_id }),
+          form({ token: tokens!.access_token, client_id: registered.client_id }),
         )
       ).status,
     ).toBe(200)
@@ -248,8 +255,8 @@ test('OAuth requires explicit email-admin approval, exact bindings and a single-
         ...(source ? { origin: source } : {}),
       },
     })
-  expect(await (await consents('')).json()).toEqual({ verifyEmail: true })
-  expect(await (await consents(github)).json()).toEqual({ verifyEmail: true })
+  expect(await (await consents('')).json()).toMatchObject({ stage: 'work-email' })
+  expect(await (await consents(github)).json()).toMatchObject({ stage: 'work-email' })
   expect((await consents(github, 'POST', origin)).status).toBe(403)
   expect((await consents(member)).status).toBe(403)
   expect((await consents(admin, 'POST', 'https://other.example')).status).toBe(403)
@@ -321,5 +328,324 @@ test('OAuth requires explicit email-admin approval, exact bindings and a single-
     const { pending } = await startFlow(overrides)
     expect(new URL(pending.headers.get('location')!).searchParams.get('error')).toBe(code)
     expect(pending.headers.get('set-cookie')).toBeNull()
+  }
+})
+
+function exchangeCode(flow: Awaited<ReturnType<typeof startFlow>>, code: string) {
+  return request(
+    `${oauth}/token`,
+    form({
+      grant_type: 'authorization_code',
+      client_id: flow.client_id,
+      redirect_uri: callback,
+      code,
+      code_verifier: flow.verifier,
+      resource,
+    }),
+  )
+}
+
+async function tokenFor(app: OAuthApp, cookie: string) {
+  const flow = await startFlow({}, app)
+  const code = (await approve(flow.pending, cookie)).get('code')!
+  const issued = await exchangeCode(flow, code)
+  expect(issued.status).toBe(200)
+  const { access_token, scope } = await issued.json()
+  expect(scope).toBe(app.scope)
+  return access_token as string
+}
+
+async function connect(token: string) {
+  const client = new Client({ name: 'test-client', version: '1.0' })
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(resource), {
+      fetch: request,
+      requestInit: { headers: bearer(token) },
+    }),
+  )
+  return client
+}
+
+test('rollback with the same database and secret cannot treat new read-only grants as admin writes', async () => {
+  const admin = await browserSession(adminEmail)
+  const app = await registerApp(admin, 'docs:read')
+  const flow = await startFlow({}, app)
+  const pending = cookieFrom(flow.pending).split('=')[1]
+
+  // Freeze the previous release's type/key and DB predicates (f85340b).
+  // That release authorized all recognized administrator bearers to write
+  // repository grants and never consulted oauth_apps or its scope.
+  const legacyType = 'portal-mcp-consent+jwt'
+  const legacyKey = createHmac('sha256', testSecret).update(legacyType).digest()
+  const verifyLegacyConsent = (value: string) =>
+    jwtVerify(value, legacyKey, {
+      algorithms: ['HS256'],
+      typ: legacyType,
+      issuer: origin,
+      audience: resource,
+    })
+  const legacyConsent = await new SignJWT(decodeJwt(pending))
+    .setProtectedHeader({ alg: 'HS256', typ: legacyType })
+    .sign(legacyKey)
+  await expect(verifyLegacyConsent(legacyConsent)).resolves.toMatchObject({
+    payload: { client_hash: hash(app.clientId) },
+  })
+  await expect(verifyLegacyConsent(pending)).rejects.toThrow()
+  expect(
+    (
+      await request(`${oauth}/consent`, {
+        headers: { cookie: `${admin}; portal_mcp_consent=${legacyConsent}` },
+      })
+    ).status,
+  ).toBe(400)
+
+  const legacyDigest = (value: string) =>
+    createHmac('sha256', testSecret).update('portal-mcp-credential\0').update(value).digest('hex')
+  const db = store()
+  const time = Math.floor(Date.now() / 1000)
+  const adminGrant = `SELECT g.flow_id FROM mcp_grants g
+    JOIN sessions s ON s.hash=g.session_hash JOIN users u ON u.id=s.user_id
+    WHERE g.credential_hash=? AND g.resource=? AND g.expires>? AND s.expires>?
+      AND u.employee=1 AND u.email=?
+      AND NOT EXISTS (SELECT 1 FROM suspended_users WHERE user_id=u.id)`
+  const legacyCodeLookup = db.prepare(`${adminGrant}
+    AND g.client_hash=? AND g.redirect_uri=? AND g.code_challenge=?`)
+  const legacyTokenLookup = db.prepare(`${adminGrant} AND g.code_challenge IS NULL`)
+  const legacyFindCode = (value: string) =>
+    legacyCodeLookup.get(
+      legacyDigest(value),
+      resource,
+      time,
+      time,
+      adminEmail,
+      hash(app.clientId),
+      callback,
+      hash(flow.verifier),
+    )
+  const legacyFindToken = (value: string) =>
+    legacyTokenLookup.get(legacyDigest(value), resource, time, time, adminEmail)
+
+  // Positive controls: even with otherwise valid session, client, redirect,
+  // PKCE, expiry and admin role, the two releases only accept their own digests.
+  const legacyCode = opaque()
+  const legacyToken = `zxm_${opaque()}`
+  const seedLegacyGrant = db.prepare(`INSERT INTO mcp_grants
+    (flow_id, credential_hash, session_hash, client_hash, resource, redirect_uri, code_challenge, expires)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+  for (const [value, challenge] of [
+    [legacyCode, hash(flow.verifier)],
+    [legacyToken, null],
+  ] as const) {
+    seedLegacyGrant.run(
+      opaque(),
+      legacyDigest(value),
+      hash(admin.split('=')[1]),
+      hash(app.clientId),
+      resource,
+      callback,
+      challenge,
+      time + 60,
+    )
+  }
+  expect(legacyFindCode(legacyCode)).toBeDefined()
+  expect(legacyFindToken(legacyToken)).toBeDefined()
+  expect(await (await exchangeCode(flow, legacyCode)).json()).toMatchObject({
+    error: 'invalid_grant',
+  })
+  expect((await request(resource, { headers: bearer(legacyToken) })).status).toBe(401)
+
+  const code = (await approve(flow.pending, admin)).get('code')!
+  expect(legacyFindCode(code)).toBeUndefined()
+  const issued = await exchangeCode(flow, code)
+  expect(issued.status).toBe(200)
+  const { access_token, scope } = await issued.json()
+  expect(scope).toBe('docs:read')
+  expect(legacyFindToken(access_token)).toBeUndefined()
+  expect((await request(resource, { headers: bearer(access_token) })).status).toBe(405)
+})
+
+test('employee apps share one lifecycle between the account API and MCP; visitors can only read', async () => {
+  const owner = await browserSession('app-owner@zixiaolabs.com')
+  const colleague = await browserSession('app-colleague@zixiaolabs.com')
+  const visitor = await browserSession('reader@example.org', 'github')
+  const registration = {
+    name: 'Docs reader',
+    redirectUris: [callback],
+    scope: 'docs:read',
+  } as const
+  expect((await request(oauthAppsPath, jsonBody(registration))).status).toBe(401)
+  expect((await request(oauthAppsPath, jsonBody(registration, visitor))).status).toBe(403)
+  expect((await request(oauthAppsPath, { headers: { cookie: visitor } })).status).toBe(403)
+  expect((await request(`${oauth}/register`, jsonBody(registration, owner))).status).toBe(404)
+  const metadata = await request('/.well-known/oauth-authorization-server')
+  expect(await metadata.json()).not.toHaveProperty('registration_endpoint')
+  expect((await request(oauthAppsPath, jsonBody({ ...registration, scope }, owner))).status).toBe(
+    403,
+  )
+  for (const redirect of [
+    'http://example.org/callback',
+    `${callback}#fragment`,
+    `${callback}?error_description=x`,
+  ]) {
+    expect(
+      (await request(oauthAppsPath, jsonBody({ ...registration, redirectUris: [redirect] }, owner)))
+        .status,
+    ).toBe(400)
+  }
+
+  const app = await registerApp(owner, 'docs:read')
+  const path = `${oauthAppsPath}/${app.clientId}`
+  const flow = await startFlow({}, app)
+  expect(
+    await (
+      await request(`${oauth}/consent`, { headers: { cookie: cookieFrom(flow.pending) } })
+    ).json(),
+  ).toMatchObject({ stage: 'sign-in', appName: app.name, scope: 'docs:read' })
+  const first = await tokenFor(app, visitor)
+  const second = await tokenFor(app, colleague)
+  const client = await connect(first)
+  try {
+    const db = store()
+    db.prepare('INSERT INTO collections VALUES (?, ?, ?, ?, ?)').run(
+      'mcp-docs',
+      'zixiao-labs/mcp-docs',
+      '999',
+      'a'.repeat(40),
+      1,
+    )
+    db.prepare('INSERT INTO articles VALUES (?, ?, ?, ?, ?, ?)').run(
+      'mcp-docs',
+      'guide/install',
+      'Install Portal',
+      'Public setup',
+      '<p>Public setup</p>',
+      'markdown',
+    )
+    expect((await client.listTools()).tools.map(({ name }) => name)).toEqual([
+      'search_documents',
+      'get_document',
+    ])
+    expect(
+      await client.callTool({
+        name: 'search_documents',
+        arguments: { query: 'INSTALL', collection: 'mcp-docs' },
+      }),
+    ).toMatchObject({
+      structuredContent: {
+        documents: [{ slug: 'guide/install', url: `${origin}/docs/mcp-docs/guide/install` }],
+        nextOffset: null,
+      },
+    })
+    expect(
+      await client.callTool({
+        name: 'get_document',
+        arguments: { collection: 'mcp-docs', slug: 'guide/install' },
+      }),
+    ).toMatchObject({ structuredContent: { html: '<p>Public setup</p>' } })
+    expect(
+      await client.callTool({
+        name: 'get_document',
+        arguments: { collection: 'mcp-docs', slug: 'missing' },
+      }),
+    ).toMatchObject({ isError: true })
+    for (const name of ['register_oauth_app', 'register_publish_repository']) {
+      expect(await client.callTool({ name, arguments: {} })).toMatchObject({ isError: true })
+    }
+    expect((await request(oauthAppsPath, { headers: bearer(first) })).status).toBe(401)
+  } finally {
+    await client.close()
+  }
+  expect(
+    (await request(path, { method: 'DELETE', headers: { origin, cookie: colleague } })).status,
+  ).toBe(404)
+  expect(
+    (await request(`${path}/tokens`, { method: 'DELETE', headers: { cookie: owner } })).status,
+  ).toBe(403)
+  expect(await (await request(oauthAppsPath, { headers: { cookie: owner } })).json()).toMatchObject(
+    { apps: [{ clientId: app.clientId, activeTokens: 2 }] },
+  )
+  const approved = (await approve(flow.pending, visitor)).get('code')!
+
+  const manager = await registerApp(owner, 'oauth:apps')
+  const managerFlow = await startFlow({}, manager)
+  const managerConsent = `${oauth}/consent`
+  const managerHeaders = (cookie: string) => ({
+    cookie: `${cookie}; ${cookieFrom(managerFlow.pending)}`,
+    origin,
+  })
+  expect((await request(managerConsent, { headers: managerHeaders(colleague) })).status).toBe(403)
+  const { id } = await (await request(managerConsent, { headers: managerHeaders(owner) })).json()
+  const anotherOwnerSession = await browserSession('app-owner@zixiaolabs.com')
+  expect(
+    (
+      await request(
+        managerConsent,
+        form({ id, decision: 'approve' }, managerHeaders(anotherOwnerSession)),
+      )
+    ).status,
+  ).toBe(400)
+  const control = await connect(await tokenFor(manager, owner))
+  try {
+    expect(await control.callTool({ name: 'list_oauth_apps' })).toMatchObject({
+      structuredContent: {
+        apps: expect.arrayContaining([expect.objectContaining({ clientId: app.clientId })]),
+      },
+    })
+    expect(
+      await control.callTool({ name: 'register_oauth_app', arguments: { ...registration, scope } }),
+    ).toMatchObject({ isError: true })
+    expect(
+      await control.callTool({ name: 'register_oauth_app', arguments: registration }),
+    ).toMatchObject({ structuredContent: { scope: 'docs:read', activeTokens: 0 } })
+    const other = await registerApp(colleague, 'docs:read')
+    expect(
+      await control.callTool({
+        name: 'unregister_oauth_app',
+        arguments: { clientId: other.clientId },
+      }),
+    ).toMatchObject({ isError: true })
+    expect(
+      await control.callTool({
+        name: 'clear_oauth_app_tokens',
+        arguments: { clientId: app.clientId },
+      }),
+    ).toMatchObject({ structuredContent: { revoked: 3 } })
+    expect(await (await exchangeCode(flow, approved)).json()).toMatchObject({
+      error: 'invalid_grant',
+    })
+    const consentHeaders = { origin, cookie: `${visitor}; ${cookieFrom(flow.pending)}` }
+    const { id: consumed } = await (
+      await request(`${oauth}/consent`, { headers: consentHeaders })
+    ).json()
+    expect(
+      (
+        await request(
+          `${oauth}/consent`,
+          form({ id: consumed, decision: 'approve' }, consentHeaders),
+        )
+      ).status,
+    ).toBe(409)
+    for (const token of [first, second])
+      expect((await request(resource, { headers: bearer(token) })).status).toBe(401)
+    const replaced = await tokenFor(app, visitor)
+    expect((await request(resource, { headers: bearer(replaced) })).status).toBe(405)
+    const pending = await startFlow({}, app)
+    expect(
+      await control.callTool({
+        name: 'unregister_oauth_app',
+        arguments: { clientId: app.clientId },
+      }),
+    ).toMatchObject({ structuredContent: { removed: true } })
+    expect(
+      (
+        await request(`${oauth}/consent`, {
+          headers: { cookie: `${visitor}; ${cookieFrom(pending.pending)}` },
+        })
+      ).status,
+    ).toBe(403)
+    expect((await startFlow({}, app)).pending.status).toBe(400)
+    expect((await request(resource, { headers: bearer(replaced) })).status).toBe(401)
+  } finally {
+    await control.close()
   }
 })

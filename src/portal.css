@@ -380,6 +380,103 @@ h2 {
   flex-wrap: wrap;
   gap: 12px;
 }
+.oauth-workspace {
+  max-width: 840px;
+}
+.oauth-back {
+  margin-bottom: 8px;
+}
+.oauth-form {
+  margin-bottom: 24px;
+}
+.oauth-form button,
+.oauth-actions button {
+  min-height: 44px;
+}
+.oauth-form > button {
+  justify-self: start;
+}
+.oauth-scope {
+  display: grid;
+  gap: 4px;
+  font: 400 14px/20px var(--zx-font);
+}
+.oauth-scope select {
+  min-height: 44px;
+  padding-inline: 12px;
+  background: var(--zx-surface);
+  color: var(--zx-text);
+  border: var(--zx-border-width) solid var(--zx-control-border);
+  border-radius: var(--zx-radius);
+  font-size: 16px;
+}
+.oauth-list {
+  list-style: none;
+  margin: 0;
+}
+.oauth-row + .oauth-row {
+  border-top: 1px solid var(--zx-border);
+  margin-top: 24px;
+  padding-top: 24px;
+}
+.oauth-row-head,
+.oauth-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 16px;
+}
+.oauth-row-head {
+  justify-content: space-between;
+}
+.oauth-row-head h2,
+.oauth-feedback {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.oauth-feedback:not(:last-child) {
+  margin-bottom: 12px;
+}
+.oauth-count {
+  font-variant-numeric: tabular-nums;
+}
+.oauth-row dl,
+.oauth-consent-details {
+  display: grid;
+  gap: 12px;
+  margin: 16px 0;
+}
+:is(.oauth-row, .oauth-consent-details) dt {
+  color: var(--zx-muted);
+  font-size: 14px;
+}
+:is(.oauth-row, .oauth-consent-details) dd {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+}
+.oauth-code {
+  font: 14px/1.6 var(--mono);
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+.oauth-consent-hint,
+.oauth-confirm-copy {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.oauth-confirm-copy {
+  margin-bottom: 16px;
+}
+.oauth-dialog {
+  width: min(440px, calc(100% - 32px));
+  color: var(--zx-text);
+}
+.oauth-dialog::backdrop {
+  background: rgb(0 0 0 / 45%);
+}
+.oauth-guide {
+  margin-top: 12px;
+}
 .admin-nav {
   gap: 8px;
   margin-bottom: 16px;

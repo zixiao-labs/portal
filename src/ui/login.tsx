@@ -3,6 +3,7 @@ import { Link } from '@tanstack/react-router'
 import { Button, TextField } from '@zixiao-labs/ui-kits-react'
 import { useEffect, useState, type FormEvent } from 'react'
 import logo from '../../assets/zixiao-logo-2.svg?url'
+import { oauthScopeLabels, type OAuthConsent } from '../oauth-app-info'
 import { requestJson, userMessage } from './request'
 
 const oauthErrors = {
@@ -14,7 +15,6 @@ const oauthErrors = {
 }
 
 const mcpConsentPath = '/api/mcp/oauth/consent'
-type Consent = { verifyEmail: true } | { verifyEmail: false; id: string; redirectUri: string }
 
 export function LoginPage({ oauthError, mcp }: { oauthError?: string; mcp?: boolean }) {
   const [email, setEmail] = useState('')
@@ -22,12 +22,12 @@ export function LoginPage({ oauthError, mcp }: { oauthError?: string; mcp?: bool
   const [sent, setSent] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [consent, setConsent] = useState<Consent>()
+  const [consent, setConsent] = useState<OAuthConsent>()
   const [consentError, setConsentError] = useState('')
   useEffect(() => {
     if (!mcp) return
     const controller = new AbortController()
-    void requestJson<Consent>(mcpConsentPath, 'GET', undefined, controller.signal)
+    void requestJson<OAuthConsent>(mcpConsentPath, 'GET', undefined, controller.signal)
       .then(setConsent)
       .catch((err: unknown) => {
         if (!controller.signal.aborted) setConsentError(userMessage(err))
@@ -70,10 +70,9 @@ export function LoginPage({ oauthError, mcp }: { oauthError?: string; mcp?: bool
         </div>
         <section className="login-surface" aria-labelledby="login-title">
           <div className="login-content">
-            <h1 id="login-title">{mcp ? '授权 MCP 客户端' : '登录门户'}</h1>
+            <h1 id="login-title">{mcp ? '授权 OAuth 应用' : '登录门户'}</h1>
             {mcp ? (
               <>
-                <p className="login-lede">此授权只允许客户端注册或撤销仓库的文档发布权限。</p>
                 {consentError ? (
                   <p className="error" role="alert">
                     {consentError}
@@ -82,20 +81,55 @@ export function LoginPage({ oauthError, mcp }: { oauthError?: string; mcp?: bool
                   <p className="muted" role="status">
                     正在检查授权请求…
                   </p>
-                ) : !consent.verifyEmail ? (
-                  <form method="post" action={mcpConsentPath} className="form-stack">
-                    <input type="hidden" name="id" value={consent.id} />
-                    <p className="muted">
-                      回调地址：<bdi>{consent.redirectUri}</bdi>。请只批准你刚刚发起的连接。
-                    </p>
-                    <Button type="submit" name="decision" value="approve" variant="solid">
-                      允许管理发布权限
-                    </Button>
-                    <Button type="submit" name="decision" value="deny" variant="ghost">
-                      拒绝
-                    </Button>
-                  </form>
-                ) : null}
+                ) : (
+                  <>
+                    <dl className="oauth-consent-details">
+                      <div>
+                        <dt>应用</dt>
+                        <dd>
+                          <bdi>{consent.appName}</bdi>
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>请求权限</dt>
+                        <dd>{oauthScopeLabels[consent.scope]}</dd>
+                      </div>
+                      <div>
+                        <dt>回调地址</dt>
+                        <dd>
+                          <bdi className="oauth-code">{consent.redirectUri}</bdi>
+                        </dd>
+                      </div>
+                    </dl>
+                    {consent.stage === 'approve' ? (
+                      <form method="post" action={mcpConsentPath} className="form-stack">
+                        <input type="hidden" name="id" value={consent.id} />
+                        <p className="muted oauth-consent-hint">
+                          核对回调地址，只批准你刚刚发起的连接。
+                        </p>
+                        <Button type="submit" name="decision" value="approve" variant="solid">
+                          {consent.scope === 'docs:read'
+                            ? '允许读取文档'
+                            : consent.scope === 'oauth:apps'
+                              ? '允许管理应用'
+                              : '允许管理发布权限'}
+                        </Button>
+                        <Button type="submit" name="decision" value="deny" variant="ghost">
+                          拒绝
+                        </Button>
+                      </form>
+                    ) : consent.stage === 'sign-in' ? (
+                      <a className="github-button" href="/api/auth/github?mcp=true">
+                        <LogoGithub aria-hidden width={18} height={18} /> 使用 GitHub 登录
+                      </a>
+                    ) : null}
+                  </>
+                )}
+                {githubError && (
+                  <p className="error github-error" role="alert">
+                    {githubError}
+                  </p>
+                )}
               </>
             ) : (
               <>
@@ -116,7 +150,7 @@ export function LoginPage({ oauthError, mcp }: { oauthError?: string; mcp?: bool
                 )}
               </>
             )}
-            {(!mcp || consent?.verifyEmail) && (
+            {(!mcp || (consent && consent.stage !== 'approve')) && (
               <form
                 id="work-email"
                 onSubmit={submit}

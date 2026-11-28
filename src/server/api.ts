@@ -1,10 +1,12 @@
 import type { AccountInfo } from '../account-info'
+import { oauthAppsPath } from '../oauth-app-info'
 import { adminAccess, adminApi, cliApi } from './admin'
 import { checkCode, finishGithub, sendCode, startGithub } from './auth'
 import { config } from './config'
 import { checkOrigin, HttpError, json, readJson } from './http'
 import { mcp } from './mcp'
 import { mcpOAuth, mcpPath } from './mcp-auth'
+import { oauthAppsApi } from './oauth-apps'
 import { publish } from './publish'
 import { removeSession, session } from './session'
 
@@ -29,6 +31,8 @@ export async function api(request: Request, path: string) {
     if (path.startsWith(`${mcpPath}/oauth/`)) return await mcpOAuth(request, path, origin)
     if (path.startsWith('/api/cli/')) return cliApi(request, path)
     if (method === 'POST' || method === 'DELETE') checkOrigin(request, origin)
+    if (path === oauthAppsPath || path.startsWith(`${oauthAppsPath}/`))
+      return await oauthAppsApi(request, path)
     if (path.startsWith('/api/admin/')) return await adminApi(request, path)
     if (path === '/api/auth/github/link' && method === 'POST')
       return await startGithub(request, true)

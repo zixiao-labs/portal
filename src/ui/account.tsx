@@ -113,6 +113,11 @@ export function AccountPage({ githubResult }: { githubResult?: 'linked' | 'confl
           )}
           {account.adminAccess === 'email-required' && <AdminVerification />}
           <div className="account-links">
+            {account.employee && (
+              <Link to="/account/oauth-apps" className="quiet-link">
+                OAuth 应用 <ArrowRight aria-hidden width={16} height={16} />
+              </Link>
+            )}
             {account.adminAccess === 'granted' && (
               <Link to="/admin" className="quiet-link">
                 管理后台 <ArrowRight aria-hidden width={16} height={16} />

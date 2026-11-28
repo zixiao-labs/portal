@@ -1,7 +1,7 @@
 import { createHmac } from 'node:crypto'
-import { jwtVerify, SignJWT, type JWTPayload } from 'jose'
+import { jwtVerify, SignJWT } from 'jose'
 import { z } from 'zod'
-import { adminAccess, isConfiguredAdmin } from './admin'
+import { oauthScopes } from '../oauth-app-info'
 import { config } from './config'
 import {
   checkOrigin,
@@ -12,15 +12,14 @@ import {
   json,
   opaque,
   readBody,
-  readJson,
   setCookie,
 } from './http'
+import { availableApp, canAuthorizeApp, clientIdFormat, redirectUris } from './oauth-apps'
 import { activeSession, session } from './session'
 import { store, transaction } from './store'
 
 export const mcpPath = '/api/mcp'
 const oauthPath = `${mcpPath}/oauth`
-export const mcpScope = 'docs:repositories'
 const metadataPath = '/.well-known/oauth-protected-resource'
 const consentAge = 10 * 60
 const tokenAge = 30 * 60
@@ -28,9 +27,12 @@ const now = () => Math.floor(Date.now() / 1000)
 const proofFormat = /^[A-Za-z0-9_-]{43}$/
 const verifierFormat = /^[A-Za-z0-9._~-]{43,128}$/
 const tokenFormat = /^zxm_[A-Za-z0-9_-]{43}$/
-const credentialHash = (value: string) =>
+// Rollback keeps SQLite and PORTAL_SECRET. The previous server treats every
+// recognized administrator credential as docs:repositories, so never reuse
+// its HMAC namespace, even for a new credential with that same scope.
+const credentialHash = (kind: 'code' | 'token', value: string) =>
   createHmac('sha256', config().secret)
-    .update('portal-mcp-credential\0')
+    .update(`portal-oauth-v2-${kind}\0`)
     .update(value)
     .digest('hex')
 
@@ -50,7 +52,6 @@ export function mcpMetadata(request: Request, path: string, origin: string) {
       ? {
           resource: origin + mcpPath,
           authorization_servers: [origin],
-          scopes_supported: [mcpScope],
           bearer_methods_supported: ['header'],
         }
       : path === '/.well-known/oauth-authorization-server'
@@ -58,9 +59,8 @@ export function mcpMetadata(request: Request, path: string, origin: string) {
             issuer: origin,
             authorization_endpoint: endpoint('authorize'),
             token_endpoint: endpoint('token'),
-            registration_endpoint: endpoint('register'),
             revocation_endpoint: endpoint('revoke'),
-            scopes_supported: [mcpScope],
+            scopes_supported: oauthScopes,
             response_types_supported: ['code'],
             grant_types_supported: ['authorization_code'],
             code_challenge_methods_supported: ['S256'],
@@ -82,7 +82,7 @@ export function mcpChallenge(invalid = false) {
   const headers = authHeaders()
   headers.set(
     'WWW-Authenticate',
-    `Bearer resource_metadata="${origin}${metadataPath}${mcpPath}", scope="${mcpScope}"${invalid ? ', error="invalid_token"' : ''}`,
+    `Bearer resource_metadata="${origin}${metadataPath}${mcpPath}"${invalid ? ', error="invalid_token"' : ''}`,
   )
   return Response.json(
     { error: invalid ? 'invalid_token' : 'authorization_required' },
@@ -106,83 +106,10 @@ class OAuthError extends HttpError {
 const invalidRequest = () => new OAuthError('invalid_request', 'Invalid OAuth request.')
 const invalidGrant = () => new OAuthError('invalid_grant', 'Invalid or expired authorization code.')
 
-function signer(type: string) {
-  const { origin, secret } = config()
-  const key = createHmac('sha256', secret).update(type).digest()
-  return {
-    sign: (claims: JWTPayload) =>
-      new SignJWT(claims)
-        .setProtectedHeader({ alg: 'HS256', typ: type })
-        .setIssuer(origin)
-        .setAudience(origin + mcpPath)
-        .sign(key),
-    verify: async (value: string) => {
-      try {
-        return (
-          await jwtVerify(value, key, {
-            algorithms: ['HS256'],
-            typ: type,
-            issuer: origin,
-            audience: origin + mcpPath,
-          })
-        ).payload
-      } catch {
-        return
-      }
-    },
-  }
-}
-
-const clientType = 'portal-mcp-client+jwt'
-const consentType = 'portal-mcp-consent+jwt'
-
-function validRedirect(value: string) {
-  if (!/^https?:\/\//.test(value) || /[^\x21-\x7e]|[\\#"]/.test(value)) return false
-  const url = URL.parse(value)
-  return (
-    url !== null &&
-    !url.username &&
-    !url.password &&
-    (url.protocol === 'https:' || ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)) &&
-    !['code', 'state', 'error'].some((key) => url.searchParams.has(key))
-  )
-}
-
-// Immutable, authenticated client descriptors avoid allocating database rows to anonymous
-// registrants. A client must still get explicit approval from an email-verified administrator.
-const redirectUris = z.array(z.string().max(512).refine(validRedirect)).min(1).max(5)
-const clientMetadata = z.object({
-  redirect_uris: redirectUris,
-  token_endpoint_auth_method: z.literal('none').optional(),
-  grant_types: z
-    .array(z.string())
-    .refine((values) => values.includes('authorization_code'))
-    .optional(),
-  response_types: z
-    .array(z.string())
-    .refine((values) => values.includes('code'))
-    .optional(),
-})
-
-async function registerClient(request: Request) {
-  const parsed = clientMetadata.safeParse(await readJson(request, 8192))
-  if (!parsed.success)
-    throw new OAuthError(
-      'invalid_client_metadata',
-      'Register a public code client with HTTPS or loopback redirect URIs.',
-    )
-  const redirect_uris = [...new Set(parsed.data.redirect_uris)].sort()
-  return json(
-    {
-      client_id: await signer(clientType).sign({ jti: opaque(), redirect_uris }),
-      redirect_uris,
-      token_endpoint_auth_method: 'none',
-      grant_types: ['authorization_code'],
-      response_types: ['code'],
-      scope: mcpScope,
-    },
-    201,
-  )
+// Also keep a pending consent from being approved under the old scope rules.
+const consentType = 'portal-oauth-v2-consent+jwt'
+function consentKey() {
+  return createHmac('sha256', config().secret).update(consentType).digest()
 }
 
 const pendingSchema = z.object({
@@ -222,9 +149,8 @@ async function authorize(request: Request, origin: string) {
   const params = new URL(request.url).searchParams
   const clientId = one(params, 'client_id') ?? ''
   const redirectUri = one(params, 'redirect_uri') ?? ''
-  const client = clientId.length <= 4096 ? await signer(clientType).verify(clientId) : undefined
-  const redirects = redirectUris.safeParse(client?.redirect_uris)
-  if (!redirects.success || !redirects.data.includes(redirectUri)) throw invalidRequest()
+  const app = clientIdFormat.test(clientId) ? availableApp(hash(clientId)) : undefined
+  if (!app || !redirectUris(app).includes(redirectUri)) throw invalidRequest()
 
   const state = one(params, 'state')
   if (state !== undefined && state.length > 256) throw invalidRequest()
@@ -235,8 +161,8 @@ async function authorize(request: Request, origin: string) {
     if (one(params, 'response_type') !== 'code')
       throw new OAuthError('unsupported_response_type', 'Use response_type=code.')
     const scope = one(params, 'scope')
-    if (scope !== undefined && scope !== mcpScope)
-      throw new OAuthError('invalid_scope', `Only ${mcpScope} is supported.`)
+    if (scope !== undefined && scope !== app.scope)
+      throw new OAuthError('invalid_scope', `This application is registered for ${app.scope}.`)
     resourceFor(params, origin)
     if (one(params, 'code_challenge_method') !== 'S256' || !proofFormat.test(challenge))
       throw new OAuthError('invalid_request', 'S256 PKCE is required.')
@@ -249,12 +175,16 @@ async function authorize(request: Request, origin: string) {
   const pending: Pending = {
     jti: opaque(),
     exp: now() + consentAge,
-    client_hash: hash(clientId),
+    client_hash: app.client_hash,
     redirect_uri: redirectUri,
     code_challenge: challenge,
     state,
   }
-  const flow = await signer(consentType).sign(pending)
+  const flow = await new SignJWT(pending)
+    .setProtectedHeader({ alg: 'HS256', typ: consentType })
+    .setIssuer(origin)
+    .setAudience(origin + mcpPath)
+    .sign(consentKey())
   return oauthRedirect(`${origin}/login?mcp=true`, [
     setCookie(origin, cookieName(origin, 'mcp_consent'), flow, consentAge),
   ])
@@ -269,52 +199,82 @@ async function readForm(request: Request) {
   return new URLSearchParams(await readBody(request, 8192))
 }
 
+async function readConsent(flow: string | undefined, origin: string) {
+  if (!flow || flow.length > 4096) return
+  try {
+    return (
+      await jwtVerify(flow, consentKey(), {
+        algorithms: ['HS256'],
+        typ: consentType,
+        issuer: origin,
+        audience: origin + mcpPath,
+      })
+    ).payload
+  } catch {
+    return
+  }
+}
+
 async function consent(request: Request, origin: string) {
   const name = cookieName(origin, 'mcp_consent')
-  const flow = cookie(request, name)
-  const parsed = pendingSchema.safeParse(
-    flow && flow.length <= 4096 ? await signer(consentType).verify(flow) : undefined,
-  )
-  if (!parsed.success) throw new HttpError(400, '授权请求已过期。请返回 MCP 客户端重新连接。')
+  const parsed = pendingSchema.safeParse(await readConsent(cookie(request, name), origin))
+  if (!parsed.success) throw new HttpError(400, '授权请求已过期。请返回客户端重新连接。')
   const pending = parsed.data
+  const unavailable = () => new HttpError(403, '此 OAuth 应用已不可用。')
+  const app = availableApp(pending.client_hash)
+  if (!app) throw unavailable()
   const current = await session(request)
-  const access = current && adminAccess(current)
-  if (current && !access) throw new HttpError(403, '仅门户管理员可以授权 MCP 客户端。')
+  const emailRequired = app.scope !== 'docs:read'
+  if (current && !canAuthorizeApp(current.user, app))
+    throw new HttpError(403, '当前账户不能授权此应用。')
+  const consentId =
+    current && (!emailRequired || current.byEmail)
+      ? hash(`${pending.jti}:${current.tokenHash}`)
+      : undefined
   if (request.method === 'GET') {
-    return json(
-      access === 'granted'
-        ? { verifyEmail: false, id: pending.jti, redirectUri: pending.redirect_uri }
-        : { verifyEmail: true },
-    )
+    return json({
+      appName: app.name,
+      scope: app.scope,
+      redirectUri: pending.redirect_uri,
+      ...(consentId
+        ? { stage: 'approve', id: consentId }
+        : { stage: emailRequired ? 'work-email' : 'sign-in' }),
+    })
   }
-  if (!current || access !== 'granted') throw new HttpError(403, '请先验证管理员工作邮箱。')
+  if (!current || !consentId) throw new HttpError(403, '请先使用符合此应用权限要求的账户登录。')
   const form = await readForm(request)
   const decision = one(form, 'decision')
-  if (one(form, 'id') !== pending.jti || (decision !== 'approve' && decision !== 'deny'))
+  if (one(form, 'id') !== consentId || (decision !== 'approve' && decision !== 'deny'))
     throw new HttpError(400, '授权请求已更改。请返回 MCP 客户端重新连接。')
 
   const db = store()
   const code = decision === 'approve' ? opaque() : undefined
   transaction(db, () => {
+    const registered = availableApp(pending.client_hash)
+    if (!registered) throw unavailable()
     const user = activeSession(current.tokenHash, String(current.user.id))
-    if (!user || !isConfiguredAdmin(user)) throw new HttpError(403, '管理会话已失效。')
-    if (pending.exp <= now()) throw new HttpError(400, '授权请求已过期。')
-    db.prepare('DELETE FROM mcp_grants WHERE expires<=?').run(now())
-    const result = db
-      .prepare(`INSERT INTO mcp_grants
+    if (!user || !canAuthorizeApp(user, registered)) throw new HttpError(403, '授权会话已失效。')
+    const time = now()
+    if (pending.exp <= time) throw new HttpError(400, '授权请求已过期。')
+    db.prepare('DELETE FROM oauth_consumed_flows WHERE expires<=?').run(time)
+    const consumed = db
+      .prepare('INSERT OR IGNORE INTO oauth_consumed_flows VALUES (?, ?)')
+      .run(pending.jti, pending.exp)
+    if (!consumed.changes) throw new HttpError(409, '授权请求已处理。')
+    if (!code) return
+    db.prepare('DELETE FROM mcp_grants WHERE expires<=?').run(time)
+    db.prepare(`INSERT INTO mcp_grants
       (flow_id, credential_hash, session_hash, client_hash, resource, redirect_uri, code_challenge, expires)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(flow_id) DO NOTHING`)
-      .run(
-        pending.jti,
-        code ? credentialHash(code) : null,
-        current.tokenHash,
-        pending.client_hash,
-        origin + mcpPath,
-        pending.redirect_uri,
-        pending.code_challenge,
-        pending.exp,
-      )
-    if (!result.changes) throw new HttpError(409, '授权请求已处理。')
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      pending.jti,
+      credentialHash('code', code),
+      current.tokenHash,
+      pending.client_hash,
+      origin + mcpPath,
+      pending.redirect_uri,
+      pending.code_challenge,
+      pending.exp,
+    )
   })
   const redirect = new URL(pending.redirect_uri)
   if (pending.state !== undefined) redirect.searchParams.set('state', pending.state)
@@ -332,31 +292,46 @@ async function exchange(request: Request, origin: string) {
   const clientId = one(form, 'client_id') ?? ''
   const redirect = one(form, 'redirect_uri') ?? ''
   const verifier = one(form, 'code_verifier') ?? ''
-  if (!proofFormat.test(code) || !verifierFormat.test(verifier) || !clientId || !redirect)
+  if (
+    !proofFormat.test(code) ||
+    !verifierFormat.test(verifier) ||
+    !clientIdFormat.test(clientId) ||
+    !redirect
+  )
     throw invalidGrant()
 
   const db = store()
   return transaction(db, () => {
     const time = now()
+    const app = availableApp(hash(clientId))
+    if (!app) throw invalidGrant()
     const grant = db
-      .prepare(`SELECT g.flow_id, s.expires AS session_expires, u.email, u.employee
+      .prepare(`SELECT g.flow_id, s.expires AS session_expires, u.id, u.email, u.employee
       FROM mcp_grants g JOIN sessions s ON s.hash=g.session_hash JOIN users u ON u.id=s.user_id
       WHERE g.credential_hash=? AND g.client_hash=? AND g.resource=? AND g.redirect_uri=?
         AND g.code_challenge=? AND g.expires>? AND s.expires>?
         AND NOT EXISTS (SELECT 1 FROM suspended_users WHERE user_id=u.id)`)
-      .get(credentialHash(code), hash(clientId), resource, redirect, hash(verifier), time, time) as
-      | { flow_id: string; session_expires: number; email: string; employee: number }
+      .get(
+        credentialHash('code', code),
+        app.client_hash,
+        resource,
+        redirect,
+        hash(verifier),
+        time,
+        time,
+      ) as
+      | { flow_id: string; session_expires: number; id: number; email: string; employee: number }
       | undefined
-    if (!grant || !isConfiguredAdmin(grant)) throw invalidGrant()
+    if (!grant || !canAuthorizeApp(grant, app)) throw invalidGrant()
     const token = `zxm_${opaque()}`
     const expires = Math.min(time + tokenAge, grant.session_expires)
     db.prepare(`UPDATE mcp_grants SET credential_hash=?, code_challenge=NULL, expires=?
-      WHERE flow_id=?`).run(credentialHash(token), expires, grant.flow_id)
+      WHERE flow_id=?`).run(credentialHash('token', token), expires, grant.flow_id)
     return json({
       access_token: token,
       token_type: 'Bearer',
       expires_in: expires - time,
-      scope: mcpScope,
+      scope: app.scope,
     })
   })
 }
@@ -368,25 +343,27 @@ async function revoke(request: Request, origin: string) {
   if (!token || !clientId) throw invalidRequest()
   if (tokenFormat.test(token)) {
     store()
-      .prepare(`UPDATE mcp_grants SET credential_hash=NULL
+      .prepare(`DELETE FROM mcp_grants
       WHERE credential_hash=? AND client_hash=? AND resource=? AND code_challenge IS NULL`)
-      .run(credentialHash(token), hash(clientId), origin + mcpPath)
+      .run(credentialHash('token', token), hash(clientId), origin + mcpPath)
   }
   return new Response(null, { headers: authHeaders() })
 }
 
 export function mcpAccess(token: string, resource: string) {
-  if (!tokenFormat.test(token)) return false
+  if (!tokenFormat.test(token)) return
+  const time = now()
   const grant = store()
-    .prepare(`SELECT u.email, u.employee
+    .prepare(`SELECT g.client_hash, u.id, u.email, u.employee
     FROM mcp_grants g JOIN sessions s ON s.hash=g.session_hash JOIN users u ON u.id=s.user_id
     WHERE g.credential_hash=? AND g.resource=? AND g.code_challenge IS NULL
       AND g.expires>? AND s.expires>?
       AND NOT EXISTS (SELECT 1 FROM suspended_users WHERE user_id=u.id)`)
-    .get(credentialHash(token), resource, now(), now()) as
-    | { email: string; employee: number }
+    .get(credentialHash('token', token), resource, time, time) as
+    | { client_hash: string; id: number; email: string; employee: number }
     | undefined
-  return Boolean(grant && isConfiguredAdmin(grant))
+  const app = grant && availableApp(grant.client_hash)
+  if (grant && app && canAuthorizeApp(grant, app)) return { user: grant, scope: app.scope }
 }
 
 export async function mcpOAuth(request: Request, path: string, origin: string) {
@@ -398,7 +375,6 @@ export async function mcpOAuth(request: Request, path: string, origin: string) {
     }
     if (path === `${oauthPath}/authorize` && method === 'GET')
       return await authorize(request, origin)
-    if (path === `${oauthPath}/register` && method === 'POST') return await registerClient(request)
     if (path === `${oauthPath}/token` && method === 'POST') return await exchange(request, origin)
     if (path === `${oauthPath}/revoke` && method === 'POST') return await revoke(request, origin)
     throw new HttpError(404, '未找到接口。')
